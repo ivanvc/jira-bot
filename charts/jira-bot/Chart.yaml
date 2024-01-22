@@ -1,0 +1,6 @@
+apiVersion: v2
+name: jira-bot
+description: A GitHub bot that creates Jira issues based from GitHub issues/PRs.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

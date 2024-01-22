@@ -14,6 +14,8 @@ type Issue struct {
 	CommentsURL string `json:"comments_url"`
 	Body        string `json:"body"`
 	State       string `json:"state"`
+	URL         string `json:"url"`
+	Title       string `json:"title"`
 }
 
 // Comment holds the comment from the IssueComment.

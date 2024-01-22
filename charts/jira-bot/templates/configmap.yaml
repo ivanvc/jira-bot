@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "jira-bot.fullname" . }}-config
+  labels:
+    {{- include "jira-bot.labels" . | nindent 4 }}
+data:
+  JIRA_BOT_JIRA_USERNAME: {{ include ".Values.config.jira.username" . }}
+  JIRA_BOT_JIRA_BASE_URL: {{ include ".Values.config.jira.base_url" . }}
+  JIRA_BOT_JIRA_DEFAULT_PROJECT: {{ include ".Values.config.jira.default_project" . }}
+  JIRA_BOT_JIRA_DEFAULT_ISSUE_TYPE: {{ include ".Values.config.jira.default_issue_type" . }}
+  {{- if .Values.config.log_level }}
+  JIRA_BOT_LOG_LEVEL: {{ .Values.config.log_level }}
+  {{- end }}
+  {{- if .Values.config.listen_http }}
+  JIRA_BOT_LISTEN_HTTP: {{ .Values.config.listen_http }}
+  {{- end }}

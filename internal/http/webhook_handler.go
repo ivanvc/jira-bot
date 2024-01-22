@@ -33,7 +33,16 @@ func (h *webhookHandler) handle(s *Server) func(http.ResponseWriter, *http.Reque
 				log.Error("Error unmarshalling", "error", err)
 			}
 
-			executor.Run(&ic)
+			if ic.Action != "created" {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+
+			if err := executor.Run(req.Context(), s.State, &ic); err != nil {
+				log.Error("Error executing webhook", "error", err)
+				w.WriteHeader(http.StatusNotAcceptable)
+				return
+			}
 		}
 
 		w.WriteHeader(http.StatusOK)
