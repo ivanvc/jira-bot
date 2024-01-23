@@ -6,18 +6,18 @@ replicaCount: 2
 
 config:
   # Optional: listen http
-  listen_http: ""
+  listenHTTP: ""
   # Optional: log level
-  log_level: ""
+  logLevel: ""
   jira:
     # Required: Jira username
     username: ""
     # Required: Jira Base URL
-    base_url: ""
+    baseURL: ""
     # Required: Default project
-    default_project: ""
+    defaultProject: ""
     # Required: Default issue type
-    default_issue_type: ""
+    defaultIssueType: ""
   namespace: ""
 
 secrets:
