@@ -22,9 +22,9 @@ config:
 
 secrets:
   # Required: GitHub token with repo access
-  github_token: ""
+  githubToken: ""
   # Required: Jira token
-  jira_token: ""
+  jiraToken: ""
 
 image:
   repository: ivan/jira-bot
