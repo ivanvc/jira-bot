@@ -17,6 +17,7 @@ config:
     # Required: Default project
     default_project: ""
     # Required: Default issue type
+    default_issue_type: ""
   namespace: ""
 
 secrets:
