@@ -5,10 +5,10 @@ metadata:
   labels:
     {{- include "jira-bot.labels" . | nindent 4 }}
 data:
-  JIRA_BOT_JIRA_USERNAME: {{ include ".Values.config.jira.username" . }}
-  JIRA_BOT_JIRA_BASE_URL: {{ include ".Values.config.jira.baseURL" . }}
-  JIRA_BOT_JIRA_DEFAULT_PROJECT: {{ include ".Values.config.jira.defaultProject" . }}
-  JIRA_BOT_JIRA_DEFAULT_ISSUE_TYPE: {{ include ".Values.config.jira.defaultIssueType" . }}
+  JIRA_BOT_JIRA_USERNAME: {{ .Values.config.jira.username }}
+  JIRA_BOT_JIRA_BASE_URL: {{ .Values.config.jira.baseURL }}
+  JIRA_BOT_JIRA_DEFAULT_PROJECT: {{ .Values.config.jira.defaultProject }}
+  JIRA_BOT_JIRA_DEFAULT_ISSUE_TYPE: {{ .Values.config.jira.defaultIssueType }}
   {{- if .Values.config.log_level }}
   JIRA_BOT_LOG_LEVEL: {{ .Values.config.logLevel }}
   {{- end }}
