@@ -68,12 +68,12 @@ func createJiraIssue(ctx context.Context, state *common.State, issueComment *git
 		if err := state.GitHubClient.PostComment(ctx, issueComment, errorAlreadyCreated); err != nil {
 			return err
 		}
-		return errors.New("a jira issue seems to have been already created")
+		return errors.New("a Jira issue seems to have been already created")
 	}
 
 	project := loadOptionWithDefault("project", state.Config.JiraDefaultProject, options)
 	issueType := loadOptionWithDefault("type", state.Config.JiraDefaultIssueType, options)
-	key, err := state.JiraClient.CreateIssue(project, issueType, issueComment.Issue.Title, fmt.Sprintf("%s\n\nGitHub link: %s\n", issueBody, issueComment.Issue.URL))
+	key, err := state.JiraClient.CreateIssue(project, issueType, issueComment.Issue.Title, fmt.Sprintf("%s\n\nGitHub link: %s\n", issueBody, issueComment.Issue.HTMLURL))
 	if err != nil {
 		return err
 	}

@@ -15,6 +15,7 @@ type Issue struct {
 	Body        string `json:"body"`
 	State       string `json:"state"`
 	URL         string `json:"url"`
+	HTMLURL     string `json:"html_url"`
 	Title       string `json:"title"`
 }
 
