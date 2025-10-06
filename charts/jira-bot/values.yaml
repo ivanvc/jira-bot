@@ -18,11 +18,16 @@ config:
     defaultProject: ""
     # Required: Default issue type
     defaultIssueType: ""
+  # Required: The GitHub App ID
+  githubAppID: ""
   namespace: ""
 
 secrets:
-  # Required: GitHub token with repo access
-  githubToken: ""
+  github:
+    # Required: GitHub webhook secret
+    webhookSecret: ""
+    # Required: GitHub app private key in Base64
+    privateKeyBase64: ""
   # Required: Jira token
   jiraToken: ""
 
