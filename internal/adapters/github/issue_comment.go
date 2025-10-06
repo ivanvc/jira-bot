@@ -4,9 +4,15 @@ import "encoding/json"
 
 // IssueComment holds the comment received.
 type IssueComment struct {
-	Action  string `json:"action"`
-	Issue   `json:"issue"`
-	Comment `json:"comment"`
+	Action       string `json:"action"`
+	Issue        `json:"issue"`
+	Comment      `json:"comment"`
+	Installation Installation `json:"installation"`
+}
+
+// Installation holds the GitHub App installation info.
+type Installation struct {
+	ID int64 `json:"id"`
 }
 
 // Issue holds the issue from the issue comment.

@@ -7,6 +7,7 @@ toolchain go1.25.1
 require (
 	github.com/andygrunwald/go-jira v1.16.0
 	github.com/charmbracelet/log v0.3.1
+	github.com/golang-jwt/jwt/v4 v4.4.2
 	github.com/google/go-github/v58 v58.0.0
 	k8s.io/utils v0.0.0-20240102154912-e7106e64919e
 )
@@ -16,7 +17,6 @@ require (
 	github.com/charmbracelet/lipgloss v0.9.1 // indirect
 	github.com/fatih/structs v1.1.0 // indirect
 	github.com/go-logfmt/logfmt v0.6.0 // indirect
-	github.com/golang-jwt/jwt/v4 v4.4.2 // indirect
 	github.com/google/go-querystring v1.1.0 // indirect
 	github.com/lucasb-eyer/go-colorful v1.2.0 // indirect
 	github.com/mattn/go-isatty v0.0.18 // indirect

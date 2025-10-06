@@ -34,7 +34,7 @@ func Run(ctx context.Context, state *common.State, issueComment *github.IssueCom
 		if err := replyWithHelp(ctx, state, issueComment); err != nil {
 			return err
 		}
-		if err := state.GitHubClient.ReactWithThumbsUp(ctx, issueComment); err != nil {
+		if err := state.GitHubClient.ReactWithThumbsUp(ctx, issueComment.Installation.ID, issueComment); err != nil {
 			return err
 		}
 		return nil
@@ -51,7 +51,7 @@ func Run(ctx context.Context, state *common.State, issueComment *github.IssueCom
 		}
 	}
 
-	if err := state.GitHubClient.ReactWithThumbsUp(ctx, issueComment); err != nil {
+	if err := state.GitHubClient.ReactWithThumbsUp(ctx, issueComment.Installation.ID, issueComment); err != nil {
 		return err
 	}
 
@@ -59,13 +59,13 @@ func Run(ctx context.Context, state *common.State, issueComment *github.IssueCom
 }
 
 func replyWithHelp(ctx context.Context, state *common.State, issueComment *github.IssueComment) error {
-	return state.GitHubClient.PostComment(ctx, issueComment, fmt.Sprintf(helpTextFormat, state.Config.JiraDefaultIssueType, state.Config.JiraDefaultProject))
+	return state.GitHubClient.PostComment(ctx, issueComment.Installation.ID, issueComment, fmt.Sprintf(helpTextFormat, state.Config.JiraDefaultIssueType, state.Config.JiraDefaultProject))
 }
 
 func createJiraIssue(ctx context.Context, state *common.State, issueComment *github.IssueComment, options []string) error {
 	issueBody := issueComment.Issue.Body
 	if strings.Contains(issueBody, "<!--JIRA_BOT_ISSUE") {
-		if err := state.GitHubClient.PostComment(ctx, issueComment, errorAlreadyCreated); err != nil {
+		if err := state.GitHubClient.PostComment(ctx, issueComment.Installation.ID, issueComment, errorAlreadyCreated); err != nil {
 			return err
 		}
 		return errors.New("a Jira issue seems to have been already created")
@@ -78,11 +78,11 @@ func createJiraIssue(ctx context.Context, state *common.State, issueComment *git
 		return err
 	}
 	body := fmt.Sprintf("%s\n\n<!--JIRA_BOT_ISSUE:[%s]-->", issueBody, key)
-	if err := state.GitHubClient.UpdateIssueDescription(ctx, issueComment, body); err != nil {
+	if err := state.GitHubClient.UpdateIssueDescription(ctx, issueComment.Installation.ID, issueComment, body); err != nil {
 		return err
 	}
 
-	return state.GitHubClient.PostComment(ctx, issueComment, fmt.Sprintf(successTextFormat, key))
+	return state.GitHubClient.PostComment(ctx, issueComment.Installation.ID, issueComment, fmt.Sprintf(successTextFormat, key))
 }
 
 func loadOptionWithDefault(option, fallback string, values []string) string {

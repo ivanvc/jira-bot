@@ -1,8 +1,13 @@
 package http
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"io"
 	"net/http"
+	"strings"
 
 	"github.com/charmbracelet/log"
 	"github.com/ivanvc/jira-bot/internal/adapters/github"
@@ -25,12 +30,26 @@ func (h *webhookHandler) handle(s *Server) func(http.ResponseWriter, *http.Reque
 			return
 		}
 
+		body, err := io.ReadAll(req.Body)
+		if err != nil {
+			log.Error("Error reading request body", "error", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		if !h.verifySignature(body, req.Header.Get("X-Hub-Signature-256"), s.State.Config.GitHubWebhookSecret) {
+			log.Error("Invalid webhook signature")
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+
 		switch req.Header.Get("X-Github-Event") {
 		case "issue_comment":
-			decoder := json.NewDecoder(req.Body)
 			var ic github.IssueComment
-			if err := decoder.Decode(&ic); err != nil {
+			if err := json.Unmarshal(body, &ic); err != nil {
 				log.Error("Error unmarshalling", "error", err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
 			}
 
 			if ic.Action != "created" {
@@ -47,4 +66,17 @@ func (h *webhookHandler) handle(s *Server) func(http.ResponseWriter, *http.Reque
 
 		w.WriteHeader(http.StatusOK)
 	}
+}
+
+func (h *webhookHandler) verifySignature(payload []byte, signature, secret string) bool {
+	if signature == "" {
+		return false
+	}
+
+	signature = strings.TrimPrefix(signature, "sha256=")
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write(payload)
+	expectedSignature := hex.EncodeToString(mac.Sum(nil))
+
+	return hmac.Equal([]byte(signature), []byte(expectedSignature))
 }

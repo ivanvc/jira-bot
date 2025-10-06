@@ -9,9 +9,15 @@ import (
 
 func main() {
 	cfg := common.LoadConfig()
+
+	githubClient, err := github.NewClient(cfg.GitHubAppID, cfg.GitHubPrivateKey)
+	if err != nil {
+		panic(err)
+	}
+
 	common := &common.State{
 		Config:       cfg,
-		GitHubClient: github.NewClient(cfg.GitHubToken),
+		GitHubClient: githubClient,
 		JiraClient:   jira.NewClient(cfg.JiraBaseURL, cfg.JiraUsername, cfg.JiraToken),
 	}
 

@@ -2,6 +2,7 @@ package common
 
 import (
 	"os"
+	"strconv"
 
 	"github.com/charmbracelet/log"
 )
@@ -9,7 +10,9 @@ import (
 type Config struct {
 	ListenHTTP string
 
-	GitHubToken string
+	GitHubAppID         int64
+	GitHubPrivateKey    string
+	GitHubWebhookSecret string
 
 	JiraBaseURL          string
 	JiraUsername         string
@@ -21,7 +24,9 @@ type Config struct {
 func LoadConfig() Config {
 	return Config{
 		ListenHTTP:           loadEnvWithDefault("JIRA_BOT_LISTEN_HTTP", ":8080"),
-		GitHubToken:          loadEnv("JIRA_BOT_GITHUB_TOKEN"),
+		GitHubAppID:          loadEnvInt64("JIRA_BOT_GITHUB_APP_ID"),
+		GitHubPrivateKey:     loadEnv("JIRA_BOT_GITHUB_PRIVATE_KEY"),
+		GitHubWebhookSecret:  loadEnv("JIRA_BOT_GITHUB_WEBHOOK_SECRET"),
 		JiraBaseURL:          loadEnv("JIRA_BOT_JIRA_BASE_URL"),
 		JiraUsername:         loadEnv("JIRA_BOT_JIRA_USERNAME"),
 		JiraToken:            loadEnv("JIRA_BOT_JIRA_TOKEN"),
@@ -44,4 +49,13 @@ func loadEnv(variable string) string {
 
 	log.Fatalf("Environment variable %q not provided", variable)
 	return ""
+}
+
+func loadEnvInt64(variable string) int64 {
+	v := loadEnv(variable)
+	i, err := strconv.ParseInt(v, 10, 64)
+	if err != nil {
+		log.Fatalf("Environment variable %q must be a valid integer", variable)
+	}
+	return i
 }
