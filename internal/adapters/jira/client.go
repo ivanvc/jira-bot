@@ -28,6 +28,12 @@ func NewClient(baseURL, username, token string) *Client {
 }
 
 func (c *Client) CreateIssue(project, issueType, summary, description string) (string, error) {
+	const maxLength = 32000
+	if len(description) > maxLength {
+		description = description[:maxLength]
+		description += "…"
+	}
+
 	issue := jira.Issue{
 		Fields: &jira.IssueFields{
 			Description: description,
@@ -44,7 +50,7 @@ func (c *Client) CreateIssue(project, issueType, summary, description string) (s
 	r, resp, err := c.Issue.Create(&issue)
 	if err != nil {
 		respDump, _ := httputil.DumpResponse(resp.Response, true)
-		log.Info("Error creating Jira issue", "response", string(respDump))
+		log.Error("Error creating Jira issue", "response", string(respDump))
 		return "", err
 	}
 
