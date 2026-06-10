@@ -23,6 +23,16 @@ The following is my list of commands:
 	* ` + "`type:[type]`" + `: Specify the type of the Jira issue to create (i.e., ` + "`type:Bug`" + `, default: ` + "`%s`" + `)
 	* ` + "`project:[project]`" + `: Specify the project of the Jira issue to create (i.e., ` + "`project:ENG`" + `, default: ` + "`%s`" + `)`
 
+const errorMessageFormat = `:x: Error trying to create issue.
+
+<details>
+<summary>Error</summary>
+` + "```" + `
+%s
+` + "```" + `
+</details>
+`
+
 // Run executes the webhook and takes action if required.
 func Run(ctx context.Context, state *common.State, issueComment *github.IssueComment) error {
 	if !strings.HasPrefix(issueComment.Comment.Body, "/jira") {
@@ -47,6 +57,10 @@ func Run(ctx context.Context, state *common.State, issueComment *github.IssueCom
 		}
 	case "create":
 		if err := createJiraIssue(ctx, state, issueComment, parts[2:]); err != nil {
+			state.GitHubClient.ReactWithConfused(ctx, issueComment.Installation.ID, issueComment)
+			errorMsg := fmt.Sprintf(errorMessageFormat, err)
+			state.GitHubClient.PostComment(ctx, issueComment.Installation.ID, issueComment, errorMsg)
+
 			return err
 		}
 	}
@@ -59,7 +73,8 @@ func Run(ctx context.Context, state *common.State, issueComment *github.IssueCom
 }
 
 func replyWithHelp(ctx context.Context, state *common.State, issueComment *github.IssueComment) error {
-	return state.GitHubClient.PostComment(ctx, issueComment.Installation.ID, issueComment, fmt.Sprintf(helpTextFormat, state.Config.JiraDefaultIssueType, state.Config.JiraDefaultProject))
+	helpText := fmt.Sprintf(helpTextFormat, state.Config.JiraDefaultIssueType, state.Config.JiraDefaultProject)
+	return state.GitHubClient.PostComment(ctx, issueComment.Installation.ID, issueComment, helpText)
 }
 
 func createJiraIssue(ctx context.Context, state *common.State, issueComment *github.IssueComment, options []string) error {

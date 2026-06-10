@@ -61,14 +61,13 @@ func (c *Client) generateJWT() (string, error) {
 	return token.SignedString(c.privateKey)
 }
 
-// ReactWithThumbsUp sends a :+1: reaction to the given IssueComment.
-func (c *Client) ReactWithThumbsUp(ctx context.Context, installationID int64, issueComment *IssueComment) error {
+func (c *Client) sendReaction(ctx context.Context, installationID int64, issueComment *IssueComment, reaction string) error {
 	client, err := c.GetInstallationClient(ctx, installationID)
 	if err != nil {
 		return err
 	}
 
-	body := &github.Reaction{Content: ptr.To("+1")}
+	body := &github.Reaction{Content: ptr.To(reaction)}
 	req, err := client.NewRequest("POST", issueComment.Comment.Reactions.URL, body)
 	if err != nil {
 		return err
@@ -82,6 +81,16 @@ func (c *Client) ReactWithThumbsUp(ctx context.Context, installationID int64, is
 	}
 
 	return nil
+}
+
+// ReactWithThumbsUp sends a :+1: reaction to the given IssueComment.
+func (c *Client) ReactWithThumbsUp(ctx context.Context, installationID int64, issueComment *IssueComment) error {
+	return c.sendReaction(ctx, installationID, issueComment, "+1")
+}
+
+// ReactWithThumbsUp sends a :confused: reaction to the given IssueComment.
+func (c *Client) ReactWithConfused(ctx context.Context, installationID int64, issueComment *IssueComment) error {
+	return c.sendReaction(ctx, installationID, issueComment, "confused")
 }
 
 // PostComment sends a comment to an issue.
