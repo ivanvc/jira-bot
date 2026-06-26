@@ -82,6 +82,14 @@ func NewTokenManager(clientID, clientSecret, refreshToken string, opts ...TokenM
 	return tm
 }
 
+// TokenState returns the current refresh token, access token, and expiry time.
+// Safe for concurrent use by multiple goroutines.
+func (tm *TokenManager) TokenState() (refreshToken, accessToken string, expiresAt time.Time) {
+	tm.mu.RLock()
+	defer tm.mu.RUnlock()
+	return tm.refreshToken, tm.accessToken, tm.expiresAt
+}
+
 // Token returns a valid access token, refreshing if necessary.
 // Safe for concurrent use by multiple goroutines.
 func (tm *TokenManager) Token() (string, error) {
