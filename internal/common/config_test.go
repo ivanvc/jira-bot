@@ -150,20 +150,41 @@ func TestLoadConfig_BasicMode_AuthModeIsBasic(t *testing.T) {
 	assert.Equal(t, "test-token", cfg.JiraToken)
 }
 
+func TestLoadConfig_OAuthSetupMode(t *testing.T) {
+	// Set common required vars
+	t.Setenv("JIRA_BOT_GITHUB_APP_ID", "12345")
+	t.Setenv("JIRA_BOT_GITHUB_PRIVATE_KEY", "test-private-key")
+	t.Setenv("JIRA_BOT_GITHUB_WEBHOOK_SECRET", "webhook-secret")
+	t.Setenv("JIRA_BOT_JIRA_DEFAULT_PROJECT", "PROJ")
+	t.Setenv("JIRA_BOT_JIRA_DEFAULT_ISSUE_TYPE", "Task")
+
+	// Set only CLIENT_ID and CLIENT_SECRET (setup mode)
+	t.Setenv("JIRA_BOT_JIRA_CLIENT_ID", "my-client-id")
+	t.Setenv("JIRA_BOT_JIRA_CLIENT_SECRET", "my-client-secret")
+
+	cfg := LoadConfig()
+
+	assert.Equal(t, "oauth2-setup", cfg.AuthMode)
+	assert.Equal(t, "my-client-id", cfg.JiraClientID)
+	assert.Equal(t, "my-client-secret", cfg.JiraClientSecret)
+	assert.Equal(t, "", cfg.JiraRefreshToken)
+	assert.Equal(t, "", cfg.JiraCloudID)
+}
+
 // TestLoadConfig_PartialOAuthVars_Fatal verifies that LoadConfig terminates
-// when only some OAuth vars are set (Requirement 1.5).
+// when only some OAuth vars are set in a non-setup pattern (Requirement 1.5).
 func TestLoadConfig_PartialOAuthVars_Fatal(t *testing.T) {
 	if os.Getenv("TEST_SUBPROCESS_FATAL") == "1" {
-		// Set only some OAuth vars (partial config)
+		// Set only some OAuth vars (partial config that isn't setup mode)
 		os.Setenv("JIRA_BOT_GITHUB_APP_ID", "123")
 		os.Setenv("JIRA_BOT_GITHUB_PRIVATE_KEY", "key")
 		os.Setenv("JIRA_BOT_GITHUB_WEBHOOK_SECRET", "secret")
 		os.Setenv("JIRA_BOT_JIRA_DEFAULT_PROJECT", "PROJ")
 		os.Setenv("JIRA_BOT_JIRA_DEFAULT_ISSUE_TYPE", "Task")
-		// Set only 2 of 4 OAuth vars
+		// Set CLIENT_ID and REFRESH_TOKEN but not CLIENT_SECRET or CLOUD_ID
 		os.Setenv("JIRA_BOT_JIRA_CLIENT_ID", "my-client-id")
-		os.Setenv("JIRA_BOT_JIRA_CLIENT_SECRET", "my-secret")
-		// Missing: JIRA_BOT_JIRA_REFRESH_TOKEN, JIRA_BOT_JIRA_CLOUD_ID
+		os.Setenv("JIRA_BOT_JIRA_REFRESH_TOKEN", "my-refresh-token")
+		// Missing: JIRA_BOT_JIRA_CLIENT_SECRET, JIRA_BOT_JIRA_CLOUD_ID
 		LoadConfig()
 		return
 	}
@@ -178,7 +199,7 @@ func TestLoadConfig_PartialOAuthVars_Fatal(t *testing.T) {
 	}
 	// Verify the error message names the missing vars
 	outputStr := string(output)
-	assert.Contains(t, outputStr, "JIRA_BOT_JIRA_REFRESH_TOKEN")
+	assert.Contains(t, outputStr, "JIRA_BOT_JIRA_CLIENT_SECRET")
 	assert.Contains(t, outputStr, "JIRA_BOT_JIRA_CLOUD_ID")
 }
 
@@ -285,7 +306,13 @@ func TestProperty_ConfigValidationNamesAllMissingVars(t *testing.T) {
 			return true
 		}
 
-		allPresent, err := ValidateOAuthEnv()
+		// Setup mode: only CLIENT_ID and CLIENT_SECRET set (bits 0 and 1)
+		// This is a valid config (no error), so skip it
+		if subset == 3 { // binary 0011 = CLIENT_ID + CLIENT_SECRET only
+			return true
+		}
+
+		allPresent, _, err := ValidateOAuthEnv()
 		if allPresent {
 			// Should not be all-present if we have missing vars
 			return false

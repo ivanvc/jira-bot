@@ -16,9 +16,13 @@ func main() {
 	}
 
 	var jiraClient common.JiraClientInterface
-	if cfg.AuthMode == "oauth2" {
+	switch cfg.AuthMode {
+	case "oauth2":
 		jiraClient = jira.NewOAuthClient(cfg.JiraCloudID, cfg.JiraClientID, cfg.JiraClientSecret, cfg.JiraRefreshToken)
-	} else {
+	case "oauth2-setup":
+		// No Jira client in setup mode — the bot only serves the OAuth setup endpoints
+		jiraClient = nil
+	default:
 		jiraClient = jira.NewClient(cfg.JiraBaseURL, cfg.JiraUsername, cfg.JiraToken)
 	}
 
