@@ -1,12 +1,14 @@
 package jira
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"math/rand"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -469,5 +471,251 @@ func TestProperty4_RotatingRefreshTokenUsedInSubsequentRequests(t *testing.T) {
 
 	if err := quick.Check(f, cfg); err != nil {
 		t.Errorf("Property 4 failed: %v", err)
+	}
+}
+
+// Feature: jira-oauth2-migration, Property 10: Single-flight token refresh under concurrency
+// **Validates: Requirements 6.1, 6.2, 6.4**
+//
+// For any number of concurrent goroutines (2–100) requesting a token when no valid
+// token is cached, the TokenManager SHALL issue exactly one HTTP refresh request,
+// and all goroutines SHALL receive the same access token value.
+func TestProperty10_SingleFlightTokenRefreshUnderConcurrency(t *testing.T) {
+	cfg := &quick.Config{MaxCount: 100}
+
+	f := func(seed uint32) bool {
+		// Generate a random goroutine count in the range 2–100.
+		numGoroutines := int(seed%99) + 2
+
+		// Count HTTP requests received by the server.
+		var requestCount atomic.Int32
+
+		// The token value returned by the server.
+		expectedToken := fmt.Sprintf("access-token-%d", seed)
+
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			requestCount.Add(1)
+			// Simulate a small delay to increase the chance of concurrent arrivals.
+			time.Sleep(5 * time.Millisecond)
+			resp := tokenRefreshResponse{
+				AccessToken:  expectedToken,
+				RefreshToken: "refresh-token",
+				ExpiresIn:    3600,
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(resp)
+		}))
+		defer server.Close()
+
+		logger := log.NewWithOptions(io.Discard, log.Options{Level: log.FatalLevel})
+		tm := NewTokenManager("client-id", "client-secret", "refresh-token",
+			WithTokenURL(server.URL),
+			WithHTTPClient(server.Client()),
+			WithLogger(logger),
+		)
+
+		// Launch N goroutines that all call Token() concurrently.
+		var wg sync.WaitGroup
+		tokens := make([]string, numGoroutines)
+		errs := make([]error, numGoroutines)
+
+		// Use a barrier to ensure all goroutines start at the same time.
+		barrier := make(chan struct{})
+
+		for i := 0; i < numGoroutines; i++ {
+			wg.Add(1)
+			go func(idx int) {
+				defer wg.Done()
+				<-barrier // Wait for the barrier to be released.
+				tokens[idx], errs[idx] = tm.Token()
+			}(i)
+		}
+
+		// Release all goroutines simultaneously.
+		close(barrier)
+		wg.Wait()
+
+		// All goroutines must succeed.
+		for i, err := range errs {
+			if err != nil {
+				t.Logf("Goroutine %d got error: %v (numGoroutines=%d)", i, err, numGoroutines)
+				return false
+			}
+		}
+
+		// All goroutines must receive the same token value.
+		for i, token := range tokens {
+			if token != expectedToken {
+				t.Logf("Goroutine %d got token %q, expected %q (numGoroutines=%d)", i, token, expectedToken, numGoroutines)
+				return false
+			}
+		}
+
+		// Exactly one HTTP request should have been made.
+		totalRequests := int(requestCount.Load())
+		if totalRequests != 1 {
+			t.Logf("Expected exactly 1 HTTP request, got %d (numGoroutines=%d)", totalRequests, numGoroutines)
+			return false
+		}
+
+		return true
+	}
+
+	if err := quick.Check(f, cfg); err != nil {
+		t.Errorf("Property 10 failed: %v", err)
+	}
+}
+
+// Feature: jira-oauth2-migration, Property 11: Single-flight error propagation under concurrency
+// **Validates: Requirements 6.3**
+//
+// For any number of concurrent goroutines (2–100) requesting a token when no valid
+// token is cached and the refresh request fails, all goroutines SHALL receive the
+// same non-nil error.
+func TestProperty11_SingleFlightErrorPropagationUnderConcurrency(t *testing.T) {
+	cfg := &quick.Config{MaxCount: 100}
+
+	f := func(seed uint32) bool {
+		// Generate random goroutine count in range 2–100.
+		numGoroutines := int(seed%99) + 2
+
+		// Count requests to verify single-flight behavior.
+		var requestCount atomic.Int32
+
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			requestCount.Add(1)
+			// Return a 4xx error (no retries) so the test completes quickly.
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			w.Write([]byte(`{"error":"invalid_grant","error_description":"refresh token revoked"}`))
+		}))
+		defer server.Close()
+
+		logger := log.NewWithOptions(io.Discard, log.Options{Level: log.FatalLevel})
+		tm := NewTokenManager("client-id", "client-secret", "refresh-token",
+			WithTokenURL(server.URL),
+			WithHTTPClient(server.Client()),
+			WithLogger(logger),
+		)
+
+		// Use a WaitGroup to synchronize goroutine start.
+		var wg sync.WaitGroup
+		wg.Add(numGoroutines)
+
+		// Use a barrier channel to ensure all goroutines start at the same time.
+		barrier := make(chan struct{})
+
+		errors := make([]error, numGoroutines)
+
+		for i := 0; i < numGoroutines; i++ {
+			go func(idx int) {
+				defer wg.Done()
+				<-barrier // Wait for all goroutines to be ready
+				_, err := tm.Token()
+				errors[idx] = err
+			}(i)
+		}
+
+		// Release all goroutines simultaneously.
+		close(barrier)
+		wg.Wait()
+
+		// All goroutines must have received a non-nil error.
+		for i, err := range errors {
+			if err == nil {
+				t.Logf("goroutine %d received nil error, expected non-nil", i)
+				return false
+			}
+		}
+
+		// All goroutines must have received the same error (same message).
+		firstErrMsg := errors[0].Error()
+		for i := 1; i < numGoroutines; i++ {
+			if errors[i].Error() != firstErrMsg {
+				t.Logf("goroutine %d received error %q, expected %q (same as goroutine 0)",
+					i, errors[i].Error(), firstErrMsg)
+				return false
+			}
+		}
+
+		return true
+	}
+
+	if err := quick.Check(f, cfg); err != nil {
+		t.Errorf("Property 11 failed: %v", err)
+	}
+}
+
+// Feature: jira-oauth2-migration, Property 12: Error response body truncation in logs
+// **Validates: Requirements 7.2**
+//
+// For any error response body with length greater than 1024 characters, the logged
+// message SHALL contain at most 1024 characters of the response body.
+func TestProperty12_ErrorResponseBodyTruncationInLogs(t *testing.T) {
+	cfg := &quick.Config{MaxCount: 100}
+
+	f := func(seed int64) bool {
+		rng := rand.New(rand.NewSource(seed))
+
+		// Generate a random response body of length 0–5000.
+		bodyLen := rng.Intn(5001)
+		bodyBytes := make([]byte, bodyLen)
+		// Use only lowercase letters to avoid any log quoting/escaping issues.
+		const charset = "abcdefghijklmnopqrstuvwxyz0123456789"
+		for i := range bodyBytes {
+			bodyBytes[i] = charset[rng.Intn(len(charset))]
+		}
+		responseBody := string(bodyBytes)
+
+		// Set up a test server that returns a 4xx error with the generated body.
+		statusCode := 400 + rng.Intn(100) // random 4xx status
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(statusCode)
+			w.Write([]byte(responseBody))
+		}))
+		defer server.Close()
+
+		// Capture log output using a buffer.
+		var logBuf bytes.Buffer
+		logger := log.NewWithOptions(&logBuf, log.Options{Level: log.ErrorLevel})
+
+		tm := NewTokenManager("client-id", "client-secret", "refresh-token",
+			WithTokenURL(server.URL),
+			WithHTTPClient(server.Client()),
+			WithLogger(logger),
+		)
+
+		// Call Token() — this will fail with a 4xx and log the error.
+		_, _ = tm.Token()
+
+		// Read the log output and check truncation behavior.
+		logOutput := logBuf.String()
+
+		if bodyLen > maxBodyLog {
+			// The full body should NOT appear in the log output (proving truncation).
+			if strings.Contains(logOutput, responseBody) {
+				t.Logf("Log should NOT contain full body of length %d", bodyLen)
+				return false
+			}
+			// The truncated prefix (first 1024 chars) should appear in the log.
+			truncated := responseBody[:maxBodyLog]
+			if !strings.Contains(logOutput, truncated) {
+				t.Logf("Expected log to contain truncated body (first %d chars) for body length %d", maxBodyLog, bodyLen)
+				return false
+			}
+		} else {
+			// For bodies <= 1024 chars, the full body should appear in the log.
+			if bodyLen > 0 && !strings.Contains(logOutput, responseBody) {
+				t.Logf("Expected log to contain full body of length %d", bodyLen)
+				return false
+			}
+		}
+
+		return true
+	}
+
+	if err := quick.Check(f, cfg); err != nil {
+		t.Errorf("Property 12 failed: %v", err)
 	}
 }
