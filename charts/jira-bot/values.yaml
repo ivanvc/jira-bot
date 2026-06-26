@@ -10,10 +10,12 @@ config:
   # Optional: log level
   logLevel: ""
   jira:
-    # Required: Jira username
-    username: ""
-    # Required: Jira Base URL
+    # OAuth 2.0: Jira Cloud ID (required for OAuth mode)
+    cloudID: ""
+    # Legacy: Jira Base URL (required for basic auth mode)
     baseURL: ""
+    # Legacy: Jira username (required for basic auth mode)
+    username: ""
     # Required: Default project
     defaultProject: ""
     # Required: Default issue type
@@ -28,8 +30,13 @@ secrets:
     webhookSecret: ""
     # Required: GitHub app private key in Base64
     privateKeyBase64: ""
-  # Required: Jira token
-  jiraToken: ""
+  jira:
+    # OAuth 2.0 credentials (required for OAuth mode)
+    clientID: ""
+    clientSecret: ""
+    refreshToken: ""
+    # Legacy PAT credential (required for basic auth mode)
+    token: ""
 
 image:
   repository: ivan/jira-bot
