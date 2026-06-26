@@ -3,7 +3,9 @@ package common
 import (
 	"os"
 	"os/exec"
+	"strings"
 	"testing"
+	"testing/quick"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -103,5 +105,81 @@ func TestLoadConfig_NonNumericIntEnvVar_Fatal(t *testing.T) {
 	assert.Error(t, err, "LoadConfig should have exited fatally when integer env var is non-numeric")
 	if exitErr, ok := err.(*exec.ExitError); ok {
 		assert.False(t, exitErr.Success(), "Process should have exited with non-zero status")
+	}
+}
+
+// --- Property-based tests ---
+
+// Feature: jira-oauth2-migration, Property 1: Config validation names all missing variables
+// **Validates: Requirements 1.5**
+//
+// For any non-empty subset of the four OAuth environment variables that is missing
+// or empty, the fatal error message produced by LoadConfig SHALL contain the name of
+// every missing/empty variable from that subset.
+func TestProperty_ConfigValidationNamesAllMissingVars(t *testing.T) {
+	// We test ValidateOAuthEnv directly since it produces the error message
+	// that LoadConfig passes to log.Fatalf. This avoids subprocess gymnastics
+	// while validating the same property.
+
+	cfg := &quick.Config{MaxCount: 100}
+
+	// Generator: random bitmask 1..14 representing which of the 4 OAuth vars are missing.
+	// Bitmask 0 (none missing = all present) and 15 (all missing = no OAuth attempted) are
+	// excluded because the property only applies when at least one var is set and at least
+	// one is missing (partial configuration).
+	property := func(bitmask uint8) bool {
+		// Map bitmask to range 1..14 (non-empty proper subset of {0,1,2,3})
+		subset := (bitmask % 14) + 1 // 1..14 inclusive
+
+		// Clear all OAuth env vars first
+		for _, name := range OAuthEnvVars {
+			os.Unsetenv(name)
+		}
+
+		// Set the vars whose bits are 1 (these are present); bits that are 0 are missing
+		var expectedMissing []string
+		for i := 0; i < 4; i++ {
+			if subset&(1<<i) != 0 {
+				// Bit is set → this var is present
+				os.Setenv(OAuthEnvVars[i], "some-value")
+			} else {
+				// Bit is not set → this var is missing
+				expectedMissing = append(expectedMissing, OAuthEnvVars[i])
+			}
+		}
+
+		// We only care about cases where the config is partial (some present, some missing)
+		if len(expectedMissing) == 0 || len(expectedMissing) == 4 {
+			// All present or all missing: not a partial config, skip
+			return true
+		}
+
+		allPresent, err := ValidateOAuthEnv()
+		if allPresent {
+			// Should not be all-present if we have missing vars
+			return false
+		}
+		if err == nil {
+			// Should have an error when partial config is detected
+			return false
+		}
+
+		errMsg := err.Error()
+		for _, name := range expectedMissing {
+			if !strings.Contains(errMsg, name) {
+				t.Logf("Error message %q does not contain expected var name %q", errMsg, name)
+				return false
+			}
+		}
+		return true
+	}
+
+	if err := quick.Check(property, cfg); err != nil {
+		t.Errorf("Property 1 failed: %v", err)
+	}
+
+	// Cleanup
+	for _, name := range OAuthEnvVars {
+		os.Unsetenv(name)
 	}
 }
