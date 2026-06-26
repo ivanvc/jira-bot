@@ -2,6 +2,7 @@ package jira
 
 import (
 	"fmt"
+	"net/http"
 	"net/http/httputil"
 
 	"github.com/andygrunwald/go-jira"
@@ -17,7 +18,7 @@ func oauthBaseURL(cloudID string) string {
 	return fmt.Sprintf("https://api.atlassian.com/ex/jira/%s", cloudID)
 }
 
-// NewClient returns a new Jira Client.
+// NewClient returns a new Jira Client using basic authentication.
 func NewClient(baseURL, username, token string) *Client {
 	tp := jira.BasicAuthTransport{
 		Username: username,
@@ -27,6 +28,28 @@ func NewClient(baseURL, username, token string) *Client {
 	c, err := jira.NewClient(tp.Client(), baseURL)
 	if err != nil {
 		log.Fatal("Error creating Jira client", "error", err)
+		return nil
+	}
+
+	return &Client{c}
+}
+
+// NewOAuthClient returns a Jira Client configured with OAuth 2.0 transport.
+func NewOAuthClient(cloudID, clientID, clientSecret, refreshToken string) *Client {
+	baseURL := oauthBaseURL(cloudID)
+
+	tm := NewTokenManager(clientID, clientSecret, refreshToken)
+
+	transport := &OAuthTransport{
+		Source: tm,
+		Base:   http.DefaultTransport,
+	}
+
+	httpClient := &http.Client{Transport: transport}
+
+	c, err := jira.NewClient(httpClient, baseURL)
+	if err != nil {
+		log.Fatal("Error creating OAuth Jira client", "error", err)
 		return nil
 	}
 

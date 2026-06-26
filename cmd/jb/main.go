@@ -15,13 +15,20 @@ func main() {
 		panic(err)
 	}
 
-	common := &common.State{
-		Config:       cfg,
-		GitHubClient: githubClient,
-		JiraClient:   jira.NewClient(cfg.JiraBaseURL, cfg.JiraUsername, cfg.JiraToken),
+	var jiraClient common.JiraClientInterface
+	if cfg.AuthMode == "oauth2" {
+		jiraClient = jira.NewOAuthClient(cfg.JiraCloudID, cfg.JiraClientID, cfg.JiraClientSecret, cfg.JiraRefreshToken)
+	} else {
+		jiraClient = jira.NewClient(cfg.JiraBaseURL, cfg.JiraUsername, cfg.JiraToken)
 	}
 
-	s := http.NewServer(common)
+	state := &common.State{
+		Config:       cfg,
+		GitHubClient: githubClient,
+		JiraClient:   jiraClient,
+	}
+
+	s := http.NewServer(state)
 	if err := s.Start(); err != nil {
 		panic(err)
 	}

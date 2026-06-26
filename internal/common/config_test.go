@@ -51,6 +51,137 @@ func TestLoadConfig_OptionalEnvVarUsesDefault(t *testing.T) {
 	assert.Equal(t, ":8080", cfg.ListenHTTP, "ListenHTTP should use default value when env var is not set")
 }
 
+// --- OAuth 2.0 mode tests ---
+
+func TestLoadConfig_OAuthMode_AllOAuthVarsSet(t *testing.T) {
+	// Set common required vars
+	t.Setenv("JIRA_BOT_GITHUB_APP_ID", "12345")
+	t.Setenv("JIRA_BOT_GITHUB_PRIVATE_KEY", "test-private-key")
+	t.Setenv("JIRA_BOT_GITHUB_WEBHOOK_SECRET", "webhook-secret")
+	t.Setenv("JIRA_BOT_JIRA_DEFAULT_PROJECT", "PROJ")
+	t.Setenv("JIRA_BOT_JIRA_DEFAULT_ISSUE_TYPE", "Task")
+
+	// Set all 4 OAuth vars
+	t.Setenv("JIRA_BOT_JIRA_CLIENT_ID", "my-client-id")
+	t.Setenv("JIRA_BOT_JIRA_CLIENT_SECRET", "my-client-secret")
+	t.Setenv("JIRA_BOT_JIRA_REFRESH_TOKEN", "my-refresh-token")
+	t.Setenv("JIRA_BOT_JIRA_CLOUD_ID", "my-cloud-id")
+
+	cfg := LoadConfig()
+
+	assert.Equal(t, "oauth2", cfg.AuthMode)
+	assert.Equal(t, "my-client-id", cfg.JiraClientID)
+	assert.Equal(t, "my-client-secret", cfg.JiraClientSecret)
+	assert.Equal(t, "my-refresh-token", cfg.JiraRefreshToken)
+	assert.Equal(t, "my-cloud-id", cfg.JiraCloudID)
+}
+
+func TestLoadConfig_OAuthMode_LegacyVarsNotRequired(t *testing.T) {
+	// Set common required vars
+	t.Setenv("JIRA_BOT_GITHUB_APP_ID", "12345")
+	t.Setenv("JIRA_BOT_GITHUB_PRIVATE_KEY", "test-private-key")
+	t.Setenv("JIRA_BOT_GITHUB_WEBHOOK_SECRET", "webhook-secret")
+	t.Setenv("JIRA_BOT_JIRA_DEFAULT_PROJECT", "PROJ")
+	t.Setenv("JIRA_BOT_JIRA_DEFAULT_ISSUE_TYPE", "Task")
+
+	// Set all 4 OAuth vars — explicitly unset legacy vars
+	t.Setenv("JIRA_BOT_JIRA_CLIENT_ID", "client-id")
+	t.Setenv("JIRA_BOT_JIRA_CLIENT_SECRET", "client-secret")
+	t.Setenv("JIRA_BOT_JIRA_REFRESH_TOKEN", "refresh-token")
+	t.Setenv("JIRA_BOT_JIRA_CLOUD_ID", "cloud-id")
+	t.Setenv("JIRA_BOT_JIRA_USERNAME", "")
+	t.Setenv("JIRA_BOT_JIRA_TOKEN", "")
+	t.Setenv("JIRA_BOT_JIRA_BASE_URL", "")
+
+	cfg := LoadConfig()
+
+	assert.Equal(t, "oauth2", cfg.AuthMode)
+	// Legacy vars should not be required and should be empty when not provided
+	assert.Equal(t, "", cfg.JiraUsername)
+	assert.Equal(t, "", cfg.JiraToken)
+	assert.Equal(t, "", cfg.JiraBaseURL)
+}
+
+func TestLoadConfig_OAuthMode_BothOAuthAndLegacySet_OAuthWins(t *testing.T) {
+	// Set common required vars
+	t.Setenv("JIRA_BOT_GITHUB_APP_ID", "12345")
+	t.Setenv("JIRA_BOT_GITHUB_PRIVATE_KEY", "test-private-key")
+	t.Setenv("JIRA_BOT_GITHUB_WEBHOOK_SECRET", "webhook-secret")
+	t.Setenv("JIRA_BOT_JIRA_DEFAULT_PROJECT", "PROJ")
+	t.Setenv("JIRA_BOT_JIRA_DEFAULT_ISSUE_TYPE", "Task")
+
+	// Set all 4 OAuth vars
+	t.Setenv("JIRA_BOT_JIRA_CLIENT_ID", "client-id")
+	t.Setenv("JIRA_BOT_JIRA_CLIENT_SECRET", "client-secret")
+	t.Setenv("JIRA_BOT_JIRA_REFRESH_TOKEN", "refresh-token")
+	t.Setenv("JIRA_BOT_JIRA_CLOUD_ID", "cloud-id")
+
+	// Also set legacy vars
+	t.Setenv("JIRA_BOT_JIRA_BASE_URL", "https://jira.example.com")
+	t.Setenv("JIRA_BOT_JIRA_USERNAME", "legacyuser")
+	t.Setenv("JIRA_BOT_JIRA_TOKEN", "legacy-token")
+
+	cfg := LoadConfig()
+
+	// OAuth should win
+	assert.Equal(t, "oauth2", cfg.AuthMode)
+	assert.Equal(t, "client-id", cfg.JiraClientID)
+	assert.Equal(t, "client-secret", cfg.JiraClientSecret)
+	assert.Equal(t, "refresh-token", cfg.JiraRefreshToken)
+	assert.Equal(t, "cloud-id", cfg.JiraCloudID)
+}
+
+func TestLoadConfig_BasicMode_AuthModeIsBasic(t *testing.T) {
+	// Set common required vars + legacy Jira vars
+	t.Setenv("JIRA_BOT_GITHUB_APP_ID", "12345")
+	t.Setenv("JIRA_BOT_GITHUB_PRIVATE_KEY", "test-private-key")
+	t.Setenv("JIRA_BOT_GITHUB_WEBHOOK_SECRET", "webhook-secret")
+	t.Setenv("JIRA_BOT_JIRA_BASE_URL", "https://jira.example.com")
+	t.Setenv("JIRA_BOT_JIRA_USERNAME", "testuser")
+	t.Setenv("JIRA_BOT_JIRA_TOKEN", "test-token")
+	t.Setenv("JIRA_BOT_JIRA_DEFAULT_PROJECT", "PROJ")
+	t.Setenv("JIRA_BOT_JIRA_DEFAULT_ISSUE_TYPE", "Task")
+
+	cfg := LoadConfig()
+
+	assert.Equal(t, "basic", cfg.AuthMode)
+	assert.Equal(t, "https://jira.example.com", cfg.JiraBaseURL)
+	assert.Equal(t, "testuser", cfg.JiraUsername)
+	assert.Equal(t, "test-token", cfg.JiraToken)
+}
+
+// TestLoadConfig_PartialOAuthVars_Fatal verifies that LoadConfig terminates
+// when only some OAuth vars are set (Requirement 1.5).
+func TestLoadConfig_PartialOAuthVars_Fatal(t *testing.T) {
+	if os.Getenv("TEST_SUBPROCESS_FATAL") == "1" {
+		// Set only some OAuth vars (partial config)
+		os.Setenv("JIRA_BOT_GITHUB_APP_ID", "123")
+		os.Setenv("JIRA_BOT_GITHUB_PRIVATE_KEY", "key")
+		os.Setenv("JIRA_BOT_GITHUB_WEBHOOK_SECRET", "secret")
+		os.Setenv("JIRA_BOT_JIRA_DEFAULT_PROJECT", "PROJ")
+		os.Setenv("JIRA_BOT_JIRA_DEFAULT_ISSUE_TYPE", "Task")
+		// Set only 2 of 4 OAuth vars
+		os.Setenv("JIRA_BOT_JIRA_CLIENT_ID", "my-client-id")
+		os.Setenv("JIRA_BOT_JIRA_CLIENT_SECRET", "my-secret")
+		// Missing: JIRA_BOT_JIRA_REFRESH_TOKEN, JIRA_BOT_JIRA_CLOUD_ID
+		LoadConfig()
+		return
+	}
+
+	cmd := exec.Command(os.Args[0], "-test.run=TestLoadConfig_PartialOAuthVars_Fatal")
+	cmd.Env = append(os.Environ(), "TEST_SUBPROCESS_FATAL=1")
+	output, err := cmd.CombinedOutput()
+
+	assert.Error(t, err, "LoadConfig should have exited fatally when OAuth vars are partially set")
+	if exitErr, ok := err.(*exec.ExitError); ok {
+		assert.False(t, exitErr.Success(), "Process should have exited with non-zero status")
+	}
+	// Verify the error message names the missing vars
+	outputStr := string(output)
+	assert.Contains(t, outputStr, "JIRA_BOT_JIRA_REFRESH_TOKEN")
+	assert.Contains(t, outputStr, "JIRA_BOT_JIRA_CLOUD_ID")
+}
+
 // --- Subprocess test helpers for fatal exit paths ---
 
 // TestLoadConfig_MissingRequiredEnvVar_Fatal verifies that LoadConfig terminates
