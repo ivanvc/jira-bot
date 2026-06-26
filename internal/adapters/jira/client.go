@@ -1,6 +1,7 @@
 package jira
 
 import (
+	"fmt"
 	"net/http/httputil"
 
 	"github.com/andygrunwald/go-jira"
@@ -9,6 +10,11 @@ import (
 
 type Client struct {
 	*jira.Client
+}
+
+// oauthBaseURL constructs the Jira API base URL for the given Atlassian Cloud ID.
+func oauthBaseURL(cloudID string) string {
+	return fmt.Sprintf("https://api.atlassian.com/ex/jira/%s", cloudID)
 }
 
 // NewClient returns a new Jira Client.
