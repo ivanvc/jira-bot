@@ -1,8 +1,8 @@
 module github.com/ivanvc/jira-bot
 
-go 1.25.0
+go 1.26
 
-toolchain go1.25.1
+toolchain go1.26.4
 
 require (
 	github.com/andygrunwald/go-jira v1.16.0
@@ -10,6 +10,7 @@ require (
 	github.com/golang-jwt/jwt/v4 v4.4.2
 	github.com/google/go-github/v58 v58.0.0
 	github.com/stretchr/testify v1.8.4
+	golang.org/x/sync v0.21.0
 	k8s.io/utils v0.0.0-20240102154912-e7106e64919e
 )
 
@@ -30,7 +31,6 @@ require (
 	github.com/rivo/uniseg v0.2.0 // indirect
 	github.com/trivago/tgo v1.0.7 // indirect
 	golang.org/x/exp v0.0.0-20231006140011-7918f672742d // indirect
-	golang.org/x/sync v0.21.0 // indirect
 	golang.org/x/sys v0.13.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
