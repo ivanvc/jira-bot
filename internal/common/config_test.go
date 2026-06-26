@@ -161,12 +161,14 @@ func TestLoadConfig_OAuthSetupMode(t *testing.T) {
 	// Set only CLIENT_ID and CLIENT_SECRET (setup mode)
 	t.Setenv("JIRA_BOT_JIRA_CLIENT_ID", "my-client-id")
 	t.Setenv("JIRA_BOT_JIRA_CLIENT_SECRET", "my-client-secret")
+	t.Setenv("JIRA_BOT_OAUTH_CALLBACK_URL", "https://bot.example.com/jira/oauth/callback")
 
 	cfg := LoadConfig()
 
 	assert.Equal(t, "oauth2-setup", cfg.AuthMode)
 	assert.Equal(t, "my-client-id", cfg.JiraClientID)
 	assert.Equal(t, "my-client-secret", cfg.JiraClientSecret)
+	assert.Equal(t, "https://bot.example.com/jira/oauth/callback", cfg.OAuthCallbackURL)
 	assert.Equal(t, "", cfg.JiraRefreshToken)
 	assert.Equal(t, "", cfg.JiraCloudID)
 }

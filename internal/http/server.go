@@ -1,7 +1,6 @@
 package http
 
 import (
-	"fmt"
 	"net/http"
 
 	"github.com/charmbracelet/log"
@@ -44,11 +43,10 @@ func (s *Server) registerHandlers() {
 	// Register OAuth setup endpoints only when client credentials are present
 	// but no refresh token is configured yet (initial setup mode).
 	if s.Config.JiraClientID != "" && s.Config.JiraClientSecret != "" && s.Config.JiraRefreshToken == "" {
-		callbackURL := fmt.Sprintf("http://localhost%s/jira/oauth/callback", s.Addr)
 		(&oauthSetupHandler{
 			clientID:     s.Config.JiraClientID,
 			clientSecret: s.Config.JiraClientSecret,
-			callbackURL:  callbackURL,
+			callbackURL:  s.Config.OAuthCallbackURL,
 		}).registerHandler()
 	}
 }

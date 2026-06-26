@@ -29,6 +29,7 @@ type Config struct {
 	JiraClientSecret string
 	JiraRefreshToken string
 	JiraCloudID      string
+	OAuthCallbackURL string
 
 	// Legacy fields
 	JiraBaseURL  string
@@ -118,6 +119,7 @@ func LoadConfig() Config {
 		cfg.AuthMode = "oauth2-setup"
 		cfg.JiraClientID = os.Getenv("JIRA_BOT_JIRA_CLIENT_ID")
 		cfg.JiraClientSecret = os.Getenv("JIRA_BOT_JIRA_CLIENT_SECRET")
+		cfg.OAuthCallbackURL = loadEnv("JIRA_BOT_OAUTH_CALLBACK_URL")
 		log.Info("OAuth 2.0 setup mode — visit /jira/oauth/authorize to complete setup")
 	} else {
 		cfg.AuthMode = "basic"

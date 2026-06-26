@@ -9,6 +9,8 @@ config:
   listenHTTP: ""
   # Optional: log level
   logLevel: ""
+  # Optional: OAuth callback URL (only needed during initial setup)
+  oauthCallbackURL: ""
   jira:
     # OAuth 2.0: Jira Cloud ID (required for OAuth mode)
     cloudID: ""

@@ -54,11 +54,12 @@ The bot uses OAuth 2.0 (3LO) to authenticate with Jira Cloud. You need to create
 
 #### 3.5 Obtain a Refresh Token
 
-The bot has a built-in setup flow. Start it with only the client credentials:
+The bot has a built-in setup flow. Start it with only the client credentials and callback URL:
 
 ```bash
 export JIRA_BOT_JIRA_CLIENT_ID=your-client-id
 export JIRA_BOT_JIRA_CLIENT_SECRET=your-client-secret
+export JIRA_BOT_OAUTH_CALLBACK_URL=https://<your-bot-host>/jira/oauth/callback
 export JIRA_BOT_GITHUB_APP_ID=123456
 export JIRA_BOT_GITHUB_PRIVATE_KEY="your-key"
 export JIRA_BOT_GITHUB_WEBHOOK_SECRET="your-secret"
@@ -66,7 +67,9 @@ export JIRA_BOT_JIRA_DEFAULT_PROJECT=ENG
 export JIRA_BOT_JIRA_DEFAULT_ISSUE_TYPE=Task
 ```
 
-Then run the bot and open `http://localhost:8080/jira/oauth/authorize` in your browser. This redirects you to Atlassian for authorization. After you approve, you're sent back to `/jira/oauth/callback` where the bot exchanges the code and displays your refresh token.
+Then run the bot and open `http://localhost:8080/jira/oauth/authorize` (or `https://<your-bot-host>/jira/oauth/authorize` if deployed) in your browser. This redirects you to Atlassian for authorization. After you approve, you're sent back to `/jira/oauth/callback` where the bot exchanges the code and displays your refresh token.
+
+The `JIRA_BOT_OAUTH_CALLBACK_URL` must match exactly what you registered in the Atlassian Developer Console (step 3.3).
 
 Copy the refresh token and set it as `JIRA_BOT_JIRA_REFRESH_TOKEN`. Once configured, restart the bot with all four OAuth variables and the setup endpoints disappear.
 

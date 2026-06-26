@@ -11,6 +11,9 @@ data:
   {{- if .Values.config.jira.cloudID }}
   JIRA_BOT_JIRA_CLOUD_ID: {{ .Values.config.jira.cloudID }}
   {{- end }}
+  {{- if .Values.config.oauthCallbackURL }}
+  JIRA_BOT_OAUTH_CALLBACK_URL: {{ .Values.config.oauthCallbackURL }}
+  {{- end }}
   {{- if .Values.config.jira.baseURL }}
   JIRA_BOT_JIRA_BASE_URL: {{ .Values.config.jira.baseURL }}
   {{- end }}
