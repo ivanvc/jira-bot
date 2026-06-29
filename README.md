@@ -200,6 +200,54 @@ These are set automatically by the Helm chart via the downward API and values:
 | `JIRA_BOT_LEASE_DURATION` | Helm values | Lease duration |
 | `JIRA_BOT_LEASE_RENEW_DEADLINE` | Helm values | Lease renewal deadline |
 
+## Per-Repository Configuration
+
+You can define repository-level defaults by adding a YAML config file to your repo. The bot checks for this file on each command invocation.
+
+### File Location
+
+The bot looks for the config file in this order:
+
+1. `.github/jira-bot.yaml`
+2. `jira-bot.yaml` (repository root)
+
+If both exist, `.github/jira-bot.yaml` wins. If neither exists, the bot falls back to global defaults.
+
+### Supported Fields
+
+```yaml
+# .github/jira-bot.yaml
+project: ENG
+type: Bug
+```
+
+| Field | Description |
+|-------|-------------|
+| `project` | Default Jira project key |
+| `type` | Default Jira issue type |
+
+Both fields are optional. You can set one without the other.
+
+### Priority Chain
+
+When resolving the project and issue type, the bot uses this priority order:
+
+| Priority | Source | Example |
+|----------|--------|---------|
+| 1 (highest) | Command options | `project:OPS` in the comment |
+| 2 | Repo config file | `project: ENG` in YAML |
+| 3 (lowest) | Global config | `JIRA_BOT_JIRA_DEFAULT_PROJECT` env var |
+
+Command-line options always win. The repo config overrides global defaults but is itself overridden by explicit command options.
+
+### Error Handling
+
+- **Missing file**: Bot uses global defaults silently.
+- **Invalid YAML**: Bot posts an error comment on the issue so the repo maintainer can fix it.
+- **GitHub API error**: Bot logs the error and falls back to global defaults.
+
+The `/jira help` command shows the effective defaults for the current repository, reflecting repo-level config when available.
+
 ## Usage
 
 Comment `/jira create` on any GitHub issue to create a Jira ticket.
