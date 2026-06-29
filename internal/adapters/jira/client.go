@@ -56,6 +56,27 @@ func NewOAuthClient(cloudID, clientID, clientSecret, refreshToken string) *Clien
 	return &Client{c}
 }
 
+// NewOAuthClientWithTokenSource returns a Jira Client configured with a custom TokenSource.
+// This allows injecting leader/follower token sources for multi-pod deployments.
+func NewOAuthClientWithTokenSource(cloudID string, source TokenSource) *Client {
+	baseURL := oauthBaseURL(cloudID)
+
+	transport := &OAuthTransport{
+		Source: source,
+		Base:   http.DefaultTransport,
+	}
+
+	httpClient := &http.Client{Transport: transport}
+
+	c, err := jira.NewClient(httpClient, baseURL)
+	if err != nil {
+		log.Fatal("Error creating OAuth Jira client with token source", "error", err)
+		return nil
+	}
+
+	return &Client{c}
+}
+
 func (c *Client) CreateIssue(project, issueType, summary, description string) (string, error) {
 	const maxLength = 32000
 	if len(description) > maxLength {
