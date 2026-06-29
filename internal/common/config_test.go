@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 	"testing/quick"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -260,6 +261,100 @@ func TestLoadConfig_NonNumericIntEnvVar_Fatal(t *testing.T) {
 	if exitErr, ok := err.(*exec.ExitError); ok {
 		assert.False(t, exitErr.Success(), "Process should have exited with non-zero status")
 	}
+}
+
+// --- Token persistence config tests ---
+
+func TestLoadConfig_TokenPersistence_DefaultValues(t *testing.T) {
+	// Set common required vars (basic mode)
+	t.Setenv("JIRA_BOT_GITHUB_APP_ID", "12345")
+	t.Setenv("JIRA_BOT_GITHUB_PRIVATE_KEY", "test-private-key")
+	t.Setenv("JIRA_BOT_GITHUB_WEBHOOK_SECRET", "webhook-secret")
+	t.Setenv("JIRA_BOT_JIRA_BASE_URL", "https://jira.example.com")
+	t.Setenv("JIRA_BOT_JIRA_USERNAME", "testuser")
+	t.Setenv("JIRA_BOT_JIRA_TOKEN", "test-token")
+	t.Setenv("JIRA_BOT_JIRA_DEFAULT_PROJECT", "PROJ")
+	t.Setenv("JIRA_BOT_JIRA_DEFAULT_ISSUE_TYPE", "Task")
+
+	cfg := LoadConfig()
+
+	// When no token persistence env vars are set, fields use defaults
+	assert.Equal(t, "", cfg.TokenSecretName)
+	assert.Equal(t, "", cfg.TokenLeaseName)
+	assert.Equal(t, "", cfg.PodName)
+	assert.Equal(t, "", cfg.PodNamespace)
+	assert.False(t, cfg.LeaderEnabled)
+	assert.Equal(t, 30*time.Second, cfg.PollInterval)
+	assert.Equal(t, 15*time.Second, cfg.LeaseDuration)
+	assert.Equal(t, 10*time.Second, cfg.LeaseRenewDeadline)
+}
+
+func TestLoadConfig_TokenPersistence_AllFieldsSet(t *testing.T) {
+	// Set common required vars (basic mode)
+	t.Setenv("JIRA_BOT_GITHUB_APP_ID", "12345")
+	t.Setenv("JIRA_BOT_GITHUB_PRIVATE_KEY", "test-private-key")
+	t.Setenv("JIRA_BOT_GITHUB_WEBHOOK_SECRET", "webhook-secret")
+	t.Setenv("JIRA_BOT_JIRA_BASE_URL", "https://jira.example.com")
+	t.Setenv("JIRA_BOT_JIRA_USERNAME", "testuser")
+	t.Setenv("JIRA_BOT_JIRA_TOKEN", "test-token")
+	t.Setenv("JIRA_BOT_JIRA_DEFAULT_PROJECT", "PROJ")
+	t.Setenv("JIRA_BOT_JIRA_DEFAULT_ISSUE_TYPE", "Task")
+
+	// Set token persistence env vars
+	t.Setenv("JIRA_BOT_TOKEN_SECRET_NAME", "my-bot-oauth-token")
+	t.Setenv("JIRA_BOT_TOKEN_LEASE_NAME", "my-bot-token-leader")
+	t.Setenv("POD_NAME", "jira-bot-abc123")
+	t.Setenv("POD_NAMESPACE", "default")
+	t.Setenv("JIRA_BOT_TOKEN_POLL_INTERVAL", "45s")
+	t.Setenv("JIRA_BOT_LEASE_DURATION", "20s")
+	t.Setenv("JIRA_BOT_LEASE_RENEW_DEADLINE", "12s")
+
+	cfg := LoadConfig()
+
+	assert.Equal(t, "my-bot-oauth-token", cfg.TokenSecretName)
+	assert.Equal(t, "my-bot-token-leader", cfg.TokenLeaseName)
+	assert.Equal(t, "jira-bot-abc123", cfg.PodName)
+	assert.Equal(t, "default", cfg.PodNamespace)
+	assert.True(t, cfg.LeaderEnabled)
+	assert.Equal(t, 45*time.Second, cfg.PollInterval)
+	assert.Equal(t, 20*time.Second, cfg.LeaseDuration)
+	assert.Equal(t, 12*time.Second, cfg.LeaseRenewDeadline)
+}
+
+func TestLoadConfig_TokenPersistence_LeaderEnabled_RequiresBothPodFields(t *testing.T) {
+	// Set common required vars (basic mode)
+	t.Setenv("JIRA_BOT_GITHUB_APP_ID", "12345")
+	t.Setenv("JIRA_BOT_GITHUB_PRIVATE_KEY", "test-private-key")
+	t.Setenv("JIRA_BOT_GITHUB_WEBHOOK_SECRET", "webhook-secret")
+	t.Setenv("JIRA_BOT_JIRA_BASE_URL", "https://jira.example.com")
+	t.Setenv("JIRA_BOT_JIRA_USERNAME", "testuser")
+	t.Setenv("JIRA_BOT_JIRA_TOKEN", "test-token")
+	t.Setenv("JIRA_BOT_JIRA_DEFAULT_PROJECT", "PROJ")
+	t.Setenv("JIRA_BOT_JIRA_DEFAULT_ISSUE_TYPE", "Task")
+
+	// Only POD_NAME set, no POD_NAMESPACE
+	t.Setenv("POD_NAME", "jira-bot-abc123")
+
+	cfg := LoadConfig()
+	assert.False(t, cfg.LeaderEnabled, "LeaderEnabled should be false when only POD_NAME is set")
+}
+
+func TestLoadConfig_TokenPersistence_InvalidDuration_UsesDefault(t *testing.T) {
+	// Set common required vars (basic mode)
+	t.Setenv("JIRA_BOT_GITHUB_APP_ID", "12345")
+	t.Setenv("JIRA_BOT_GITHUB_PRIVATE_KEY", "test-private-key")
+	t.Setenv("JIRA_BOT_GITHUB_WEBHOOK_SECRET", "webhook-secret")
+	t.Setenv("JIRA_BOT_JIRA_BASE_URL", "https://jira.example.com")
+	t.Setenv("JIRA_BOT_JIRA_USERNAME", "testuser")
+	t.Setenv("JIRA_BOT_JIRA_TOKEN", "test-token")
+	t.Setenv("JIRA_BOT_JIRA_DEFAULT_PROJECT", "PROJ")
+	t.Setenv("JIRA_BOT_JIRA_DEFAULT_ISSUE_TYPE", "Task")
+
+	// Set an invalid duration value
+	t.Setenv("JIRA_BOT_TOKEN_POLL_INTERVAL", "not-a-duration")
+
+	cfg := LoadConfig()
+	assert.Equal(t, 30*time.Second, cfg.PollInterval, "should fall back to default on invalid duration")
 }
 
 // --- Property-based tests ---

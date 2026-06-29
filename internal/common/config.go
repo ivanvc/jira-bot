@@ -5,6 +5,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/log"
 )
@@ -41,6 +42,16 @@ type Config struct {
 
 	// Derived: "oauth2" or "basic"
 	AuthMode string
+
+	// Token persistence fields (set via env vars from Helm)
+	TokenSecretName    string        // JIRA_BOT_TOKEN_SECRET_NAME
+	TokenLeaseName     string        // JIRA_BOT_TOKEN_LEASE_NAME
+	PodName            string        // POD_NAME (from downward API)
+	PodNamespace       string        // POD_NAMESPACE (from downward API)
+	LeaderEnabled      bool          // derived: true when PodName and PodNamespace are both set
+	PollInterval       time.Duration // JIRA_BOT_TOKEN_POLL_INTERVAL, default 30s
+	LeaseDuration      time.Duration // JIRA_BOT_LEASE_DURATION, default 15s
+	LeaseRenewDeadline time.Duration // JIRA_BOT_LEASE_RENEW_DEADLINE, default 10s
 }
 
 // ValidateOAuthEnv checks which OAuth environment variables are set and returns
@@ -128,6 +139,16 @@ func LoadConfig() Config {
 		cfg.JiraToken = loadEnv("JIRA_BOT_JIRA_TOKEN")
 	}
 
+	// Token persistence config — loaded optionally (feature degrades gracefully if missing)
+	cfg.TokenSecretName = loadEnvWithDefault("JIRA_BOT_TOKEN_SECRET_NAME", "")
+	cfg.TokenLeaseName = loadEnvWithDefault("JIRA_BOT_TOKEN_LEASE_NAME", "")
+	cfg.PodName = loadEnvWithDefault("POD_NAME", "")
+	cfg.PodNamespace = loadEnvWithDefault("POD_NAMESPACE", "")
+	cfg.LeaderEnabled = cfg.PodName != "" && cfg.PodNamespace != ""
+	cfg.PollInterval = loadEnvDuration("JIRA_BOT_TOKEN_POLL_INTERVAL", 30*time.Second)
+	cfg.LeaseDuration = loadEnvDuration("JIRA_BOT_LEASE_DURATION", 15*time.Second)
+	cfg.LeaseRenewDeadline = loadEnvDuration("JIRA_BOT_LEASE_RENEW_DEADLINE", 10*time.Second)
+
 	return cfg
 }
 
@@ -154,4 +175,20 @@ func loadEnvInt64(variable string) int64 {
 		log.Fatalf("Environment variable %q must be a valid integer", variable)
 	}
 	return i
+}
+
+// loadEnvDuration loads a duration from the given environment variable, returning
+// the fallback value if the variable is unset or empty. Logs a warning and returns
+// the fallback if the value cannot be parsed as a duration.
+func loadEnvDuration(variable string, fallback time.Duration) time.Duration {
+	v, ok := os.LookupEnv(variable)
+	if !ok || v == "" {
+		return fallback
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		log.Warnf("Environment variable %q has invalid duration %q, using default %s", variable, v, fallback)
+		return fallback
+	}
+	return d
 }
