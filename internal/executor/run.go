@@ -89,6 +89,11 @@ func createJiraIssue(ctx context.Context, state *common.State, issueComment *git
 
 	project := loadOptionWithDefault("project", state.Config.JiraDefaultProject, options)
 	issueType := loadOptionWithDefault("type", state.Config.JiraDefaultIssueType, options)
+
+	if state.JiraClient == nil {
+		return errors.New("Jira client is not configured (bot is in setup mode)")
+	}
+
 	key, err := state.JiraClient.CreateIssue(project, issueType, issueComment.Issue.Title, fmt.Sprintf("%s\n\nGitHub link: %s\n", issueBody, issueComment.Issue.HTMLURL))
 	if err != nil {
 		return err
