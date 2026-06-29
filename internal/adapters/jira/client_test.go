@@ -2,6 +2,7 @@ package jira
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -76,6 +77,28 @@ func TestCreateIssue(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCreateIssue_TransportError(t *testing.T) {
+	// Simulate a transport-level failure (e.g., token refresh fails)
+	// where no HTTP response is produced — only an error.
+	failingSource := &failingTokenSource{err: fmt.Errorf("refresh_token is invalid")}
+	client := NewOAuthClientWithTokenSource("fake-cloud-id", failingSource)
+
+	key, err := client.CreateIssue("TEST", "Task", "Test issue", "Test description")
+
+	assert.Error(t, err)
+	assert.Empty(t, key)
+	assert.Contains(t, err.Error(), "refresh_token is invalid")
+}
+
+// failingTokenSource always returns an error, simulating a failed token refresh.
+type failingTokenSource struct {
+	err error
+}
+
+func (f *failingTokenSource) Token() (string, error) {
+	return "", f.err
 }
 
 func TestCreateIssue_DescriptionTruncation(t *testing.T) {

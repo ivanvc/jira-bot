@@ -99,8 +99,12 @@ func (c *Client) CreateIssue(project, issueType, summary, description string) (s
 
 	r, resp, err := c.Issue.Create(&issue)
 	if err != nil {
-		respDump, _ := httputil.DumpResponse(resp.Response, true)
-		log.Error("Error creating Jira issue", "response", string(respDump))
+		if resp != nil && resp.Response != nil {
+			respDump, _ := httputil.DumpResponse(resp.Response, true)
+			log.Error("Error creating Jira issue", "response", string(respDump))
+		} else {
+			log.Error("Error creating Jira issue", "error", err)
+		}
 		return "", err
 	}
 
