@@ -4,10 +4,23 @@ import "encoding/json"
 
 // IssueComment holds the comment received.
 type IssueComment struct {
-	Action       string `json:"action"`
+	Action       string       `json:"action"`
 	Issue        `json:"issue"`
 	Comment      `json:"comment"`
 	Installation Installation `json:"installation"`
+	Repository   Repository   `json:"repository"`
+}
+
+// Repository holds the repository info from the webhook payload.
+type Repository struct {
+	Owner    RepositoryOwner `json:"owner"`
+	Name     string          `json:"name"`
+	FullName string          `json:"full_name"`
+}
+
+// RepositoryOwner holds the owner info of a repository.
+type RepositoryOwner struct {
+	Login string `json:"login"`
 }
 
 // Installation holds the GitHub App installation info.

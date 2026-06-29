@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/ivanvc/jira-bot/internal/adapters/github"
+	"github.com/ivanvc/jira-bot/internal/config"
 )
 
 // GitHubClientInterface defines the methods used by the executor and handlers
@@ -20,4 +21,9 @@ type GitHubClientInterface interface {
 // Jira. This enables dependency injection of mock implementations during testing.
 type JiraClientInterface interface {
 	CreateIssue(project, issueType, summary, description string) (string, error)
+}
+
+// RepoConfigLoaderInterface defines the method for loading per-repository configuration.
+type RepoConfigLoaderInterface interface {
+	LoadRepoConfig(ctx context.Context, installationID int64, owner, repo string) (config.RepoConfig, error)
 }

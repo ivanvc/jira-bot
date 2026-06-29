@@ -2,6 +2,7 @@ package common
 
 type State struct {
 	Config
-	GitHubClient GitHubClientInterface
-	JiraClient   JiraClientInterface
+	GitHubClient     GitHubClientInterface
+	JiraClient       JiraClientInterface
+	RepoConfigLoader RepoConfigLoaderInterface
 }
