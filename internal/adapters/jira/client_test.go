@@ -66,7 +66,7 @@ func TestCreateIssue(t *testing.T) {
 			client := NewClient(server.URL, "user", "token")
 			require.NotNil(t, client)
 
-			key, err := client.CreateIssue(tt.project, tt.issueType, tt.summary, tt.description)
+			key, err := client.CreateIssue(tt.project, tt.issueType, tt.summary, tt.description, nil)
 
 			if tt.wantErr {
 				assert.Error(t, err)
@@ -85,7 +85,7 @@ func TestCreateIssue_TransportError(t *testing.T) {
 	failingSource := &failingTokenSource{err: fmt.Errorf("refresh_token is invalid")}
 	client := NewOAuthClientWithTokenSource("fake-cloud-id", failingSource)
 
-	key, err := client.CreateIssue("TEST", "Task", "Test issue", "Test description")
+	key, err := client.CreateIssue("TEST", "Task", "Test issue", "Test description", nil)
 
 	assert.Error(t, err)
 	assert.Empty(t, key)
@@ -122,7 +122,7 @@ func TestCreateIssue_DescriptionTruncation(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient(server.URL, "user", "token")
-	key, err := client.CreateIssue("TEST", "Task", "Test", longDescription)
+	key, err := client.CreateIssue("TEST", "Task", "Test", longDescription, nil)
 	
 	assert.NoError(t, err)
 	assert.Equal(t, "TEST-124", key)
@@ -170,6 +170,133 @@ func TestParseJiraErrorBody_EmptyErrors(t *testing.T) {
 	assert.Equal(t, "", result)
 }
 
+func TestCreateIssue_StructuredRepoConfigFields(t *testing.T) {
+	// Requirement 5.2: Structured values from repo config are set in payload without modification
+	extraFields := map[string]interface{}{
+		"components": []interface{}{
+			map[string]interface{}{"name": "Backend"},
+			map[string]interface{}{"name": "API"},
+		},
+		"priority": map[string]interface{}{"name": "Medium"},
+		"labels":   []interface{}{"team-platform", "sprint-42"},
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]interface{}
+		err := json.NewDecoder(r.Body).Decode(&payload)
+		require.NoError(t, err)
+
+		fields := payload["fields"].(map[string]interface{})
+
+		// Verify core fields are present
+		assert.Equal(t, "Test summary", fields["summary"])
+		assert.Equal(t, "Test description", fields["description"])
+
+		project := fields["project"].(map[string]interface{})
+		assert.Equal(t, "TEST", project["key"])
+
+		issueType := fields["issuetype"].(map[string]interface{})
+		assert.Equal(t, "Task", issueType["name"])
+
+		// Verify structured extra fields are set without modification
+		components := fields["components"].([]interface{})
+		require.Len(t, components, 2)
+		assert.Equal(t, "Backend", components[0].(map[string]interface{})["name"])
+		assert.Equal(t, "API", components[1].(map[string]interface{})["name"])
+
+		priority := fields["priority"].(map[string]interface{})
+		assert.Equal(t, "Medium", priority["name"])
+
+		labels := fields["labels"].([]interface{})
+		require.Len(t, labels, 2)
+		assert.Equal(t, "team-platform", labels[0])
+		assert.Equal(t, "sprint-42", labels[1])
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(201)
+		json.NewEncoder(w).Encode(map[string]interface{}{"key": "TEST-200"})
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, "user", "token")
+	key, err := client.CreateIssue("TEST", "Task", "Test summary", "Test description", extraFields)
+
+	assert.NoError(t, err)
+	assert.Equal(t, "TEST-200", key)
+}
+
+func TestCreateIssue_CoercedCommandLineValues(t *testing.T) {
+	// Requirement 5.3: Coerced command-line values (from Field Coercer) are set correctly
+	// These are the structures produced by CoerceField for well-known fields
+	extraFields := map[string]interface{}{
+		"components": []interface{}{map[string]interface{}{"name": "Frontend"}},
+		"priority":   map[string]interface{}{"name": "High"},
+		"labels":     []interface{}{"bug-fix"},
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]interface{}
+		err := json.NewDecoder(r.Body).Decode(&payload)
+		require.NoError(t, err)
+
+		fields := payload["fields"].(map[string]interface{})
+
+		// Verify coerced command-line values appear correctly in payload
+		components := fields["components"].([]interface{})
+		require.Len(t, components, 1)
+		assert.Equal(t, "Frontend", components[0].(map[string]interface{})["name"])
+
+		priority := fields["priority"].(map[string]interface{})
+		assert.Equal(t, "High", priority["name"])
+
+		labels := fields["labels"].([]interface{})
+		require.Len(t, labels, 1)
+		assert.Equal(t, "bug-fix", labels[0])
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(201)
+		json.NewEncoder(w).Encode(map[string]interface{}{"key": "TEST-201"})
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, "user", "token")
+	key, err := client.CreateIssue("TEST", "Task", "Test summary", "Test description", extraFields)
+
+	assert.NoError(t, err)
+	assert.Equal(t, "TEST-201", key)
+}
+
+func TestCreateIssue_RawStringCustomFields(t *testing.T) {
+	// Requirement 5.4: Raw string values for custom fields are set directly
+	extraFields := map[string]interface{}{
+		"customfield_10001": "urgent",
+		"customfield_10050": "my-value-with:colons",
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]interface{}
+		err := json.NewDecoder(r.Body).Decode(&payload)
+		require.NoError(t, err)
+
+		fields := payload["fields"].(map[string]interface{})
+
+		// Verify raw string custom fields are set directly without modification
+		assert.Equal(t, "urgent", fields["customfield_10001"])
+		assert.Equal(t, "my-value-with:colons", fields["customfield_10050"])
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(201)
+		json.NewEncoder(w).Encode(map[string]interface{}{"key": "TEST-202"})
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, "user", "token")
+	key, err := client.CreateIssue("TEST", "Task", "Test summary", "Test description", extraFields)
+
+	assert.NoError(t, err)
+	assert.Equal(t, "TEST-202", key)
+}
+
 func TestCreateIssue_ReturnsJiraAPIError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -179,7 +306,7 @@ func TestCreateIssue_ReturnsJiraAPIError(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient(server.URL, "user", "token")
-	key, err := client.CreateIssue("TEST", "Task", "Test", "description")
+	key, err := client.CreateIssue("TEST", "Task", "Test", "description", nil)
 
 	assert.Error(t, err)
 	assert.Empty(t, key)

@@ -20,7 +20,7 @@ type GitHubClientInterface interface {
 // JiraClientInterface defines the methods used by the executor to interact with
 // Jira. This enables dependency injection of mock implementations during testing.
 type JiraClientInterface interface {
-	CreateIssue(project, issueType, summary, description string) (string, error)
+	CreateIssue(project, issueType, summary, description string, extraFields map[string]interface{}) (string, error)
 }
 
 // RepoConfigLoaderInterface defines the method for loading per-repository configuration.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/charmbracelet/log"
@@ -84,6 +85,7 @@ func Run(ctx context.Context, state *common.State, issueComment *github.IssueCom
 func replyWithHelp(ctx context.Context, state *common.State, issueComment *github.IssueComment) error {
 	defaultType := state.Config.JiraDefaultIssueType
 	defaultProject := state.Config.JiraDefaultProject
+	var fieldNames []string
 
 	if state.RepoConfigLoader != nil {
 		repoCfg, err := state.RepoConfigLoader.LoadRepoConfig(
@@ -97,10 +99,19 @@ func replyWithHelp(ctx context.Context, state *common.State, issueComment *githu
 		} else {
 			defaultType = resolveOption("", repoCfg.Type, state.Config.JiraDefaultIssueType)
 			defaultProject = resolveOption("", repoCfg.Project, state.Config.JiraDefaultProject)
+			if len(repoCfg.Fields) > 0 {
+				for k := range repoCfg.Fields {
+					fieldNames = append(fieldNames, k)
+				}
+				sort.Strings(fieldNames)
+			}
 		}
 	}
 
 	helpText := fmt.Sprintf(helpTextFormat, defaultType, defaultProject)
+	if len(fieldNames) > 0 {
+		helpText += "\n\n**Default fields:** " + strings.Join(fieldNames, ", ")
+	}
 	return state.GitHubClient.PostComment(ctx, issueComment.Installation.ID, issueComment, helpText)
 }
 
@@ -115,6 +126,7 @@ func createJiraIssue(ctx context.Context, state *common.State, issueComment *git
 
 	// Load repo config if available
 	var repoProject, repoType string
+	var repoFields map[string]interface{}
 	if state.RepoConfigLoader != nil {
 		repoCfg, err := state.RepoConfigLoader.LoadRepoConfig(
 			ctx,
@@ -127,6 +139,7 @@ func createJiraIssue(ctx context.Context, state *common.State, issueComment *git
 		}
 		repoProject = repoCfg.Project
 		repoType = repoCfg.Type
+		repoFields = repoCfg.Fields
 	}
 
 	commandProject := loadOptionFromCommand("project", options)
@@ -135,11 +148,15 @@ func createJiraIssue(ctx context.Context, state *common.State, issueComment *git
 	project := resolveOption(commandProject, repoProject, state.Config.JiraDefaultProject)
 	issueType := resolveOption(commandType, repoType, state.Config.JiraDefaultIssueType)
 
+	// Merge repo config fields with command-line field overrides
+	commandFields := loadFieldsFromCommand(options)
+	extraFields := MergeFields(repoFields, commandFields)
+
 	if state.JiraClient == nil {
 		return errors.New("Jira client is not configured (bot is in setup mode)")
 	}
 
-	key, err := state.JiraClient.CreateIssue(project, issueType, issueComment.Issue.Title, fmt.Sprintf("%s\n\nGitHub link: %s\n", issueBody, issueComment.Issue.HTMLURL))
+	key, err := state.JiraClient.CreateIssue(project, issueType, issueComment.Issue.Title, fmt.Sprintf("%s\n\nGitHub link: %s\n", issueBody, issueComment.Issue.HTMLURL), extraFields)
 	if err != nil {
 		return err
 	}
@@ -182,4 +199,52 @@ func loadOptionWithDefault(option, fallback string, values []string) string {
 		return v
 	}
 	return fallback
+}
+
+// maxFieldOverrides is the maximum number of field overrides allowed in a single command.
+const maxFieldOverrides = 20
+
+// loadFieldsFromCommand extracts all key:value pairs from command options
+// that are not "project" or "type", applying coercion for well-known fields.
+// The first colon is the delimiter; remaining colons are part of the value.
+// Duplicate keys: last occurrence wins. Empty values are ignored.
+// A maximum of 20 non-reserved key:value pairs are processed.
+func loadFieldsFromCommand(options []string) map[string]interface{} {
+	result := make(map[string]interface{})
+	count := 0
+
+	for _, opt := range options {
+		parts := strings.SplitN(opt, ":", 2)
+		if len(parts) != 2 {
+			continue
+		}
+
+		key := parts[0]
+		value := parts[1]
+
+		// Skip reserved keys
+		if key == "project" || key == "type" {
+			continue
+		}
+
+		// Ignore empty values
+		if value == "" {
+			continue
+		}
+
+		// Cap at maxFieldOverrides
+		count++
+		if count > maxFieldOverrides {
+			continue
+		}
+
+		// Apply coercion for well-known fields; use raw string for others
+		if coerced, ok := CoerceField(key, value); ok {
+			result[key] = coerced
+		} else {
+			result[key] = value
+		}
+	}
+
+	return result
 }

@@ -219,14 +219,24 @@ If both exist, `.github/jira-bot.yaml` wins. If neither exists, the bot falls ba
 # .github/jira-bot.yaml
 project: ENG
 type: Bug
+fields:
+  components:
+    - name: Backend
+  priority:
+    name: High
+  labels:
+    - team-platform
+    - sprint-42
+  customfield_10001: "My Custom Value"
 ```
 
 | Field | Description |
 |-------|-------------|
 | `project` | Default Jira project key |
 | `type` | Default Jira issue type |
+| `fields` | Map of arbitrary Jira fields included in every issue created from this repo |
 
-Both fields are optional. You can set one without the other.
+All fields are optional. The `fields` map accepts any structure that matches the Jira API schema for your project — scalars, arrays, or nested objects.
 
 ### Priority Chain
 
@@ -239,6 +249,43 @@ When resolving the project and issue type, the bot uses this priority order:
 | 3 (lowest) | Global config | `JIRA_BOT_JIRA_DEFAULT_PROJECT` env var |
 
 Command-line options always win. The repo config overrides global defaults but is itself overridden by explicit command options.
+
+### Command-Line Field Overrides
+
+You can specify Jira fields inline when creating an issue. Any `key:value` pair that isn't `project` or `type` is treated as a field override:
+
+```
+/jira create priority:High components:Backend customfield_10001:myvalue
+```
+
+Rules:
+- The first colon is the delimiter — remaining colons are part of the value (e.g., `customfield_10001:http://example.com` sets the value to `http://example.com`)
+- If the same key appears more than once, the last occurrence wins
+- Empty values (e.g., `priority:`) are ignored
+- Up to 20 field overrides are supported per command
+
+### Smart Coercion for Well-Known Fields
+
+When you specify well-known fields on the command line, the bot automatically converts the simple string value into the JSON structure expected by the Jira API:
+
+| Field | Command Syntax | JSON Produced |
+|-------|---------------|---------------|
+| `components` | `components:Backend` | `[{"name": "Backend"}]` |
+| `priority` | `priority:High` | `{"name": "High"}` |
+| `labels` | `labels:urgent` | `["urgent"]` |
+
+This coercion applies only to command-line values. Values defined in the repo config `fields` map are sent as-is (they're already structured YAML).
+
+### Field Priority Chain
+
+Fields follow the same override pattern as `project` and `type`:
+
+| Priority | Source |
+|----------|--------|
+| 1 (highest) | Command-line field overrides |
+| 2 (lowest) | Repo config `fields` map |
+
+Command-line field values replace repo config values entirely — there is no deep merge. For example, if your repo config defines `components` with two entries and you specify `components:Frontend` on the command line, the final value is `[{"name": "Frontend"}]` (not appended to the repo config list).
 
 ### Error Handling
 

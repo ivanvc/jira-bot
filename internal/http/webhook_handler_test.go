@@ -57,8 +57,8 @@ type MockJiraClient struct {
 	Calls     []MockCall
 }
 
-func (m *MockJiraClient) CreateIssue(project, issueType, summary, description string) (string, error) {
-	m.Calls = append(m.Calls, MockCall{Method: "CreateIssue", Args: []interface{}{project, issueType, summary, description}})
+func (m *MockJiraClient) CreateIssue(project, issueType, summary, description string, extraFields map[string]interface{}) (string, error) {
+	m.Calls = append(m.Calls, MockCall{Method: "CreateIssue", Args: []interface{}{project, issueType, summary, description, extraFields}})
 	return m.ReturnKey, m.ReturnErr
 }
 

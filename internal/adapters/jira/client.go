@@ -9,6 +9,7 @@ import (
 
 	"github.com/andygrunwald/go-jira"
 	"github.com/charmbracelet/log"
+	"github.com/trivago/tgo/tcontainer"
 )
 
 type Client struct {
@@ -79,11 +80,28 @@ func NewOAuthClientWithTokenSource(cloudID string, source TokenSource) *Client {
 	return &Client{c}
 }
 
-func (c *Client) CreateIssue(project, issueType, summary, description string) (string, error) {
+func (c *Client) CreateIssue(project, issueType, summary, description string, extraFields map[string]interface{}) (string, error) {
 	const maxLength = 32000
 	if len(description) > maxLength {
 		description = description[:maxLength]
 		description += "…"
+	}
+
+	// Filter out core fields from extraFields before injecting into Unknowns.
+	var unknowns tcontainer.MarshalMap
+	if len(extraFields) > 0 {
+		unknowns = make(tcontainer.MarshalMap, len(extraFields))
+		for k, v := range extraFields {
+			switch k {
+			case "project", "summary", "description", "issuetype":
+				continue
+			default:
+				unknowns[k] = v
+			}
+		}
+		if len(unknowns) == 0 {
+			unknowns = nil
+		}
 	}
 
 	issue := jira.Issue{
@@ -96,6 +114,7 @@ func (c *Client) CreateIssue(project, issueType, summary, description string) (s
 			Project: jira.Project{
 				Key: project,
 			},
+			Unknowns: unknowns,
 		},
 	}
 

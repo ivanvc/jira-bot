@@ -3,6 +3,7 @@ package executor
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/ivanvc/jira-bot/internal/adapters/github"
@@ -53,8 +54,8 @@ type MockJiraClient struct {
 	Calls     []MockCall
 }
 
-func (m *MockJiraClient) CreateIssue(project, issueType, summary, description string) (string, error) {
-	m.Calls = append(m.Calls, MockCall{Method: "CreateIssue", Args: []interface{}{project, issueType, summary, description}})
+func (m *MockJiraClient) CreateIssue(project, issueType, summary, description string, extraFields map[string]interface{}) (string, error) {
+	m.Calls = append(m.Calls, MockCall{Method: "CreateIssue", Args: []interface{}{project, issueType, summary, description, extraFields}})
 	return m.ReturnKey, m.ReturnErr
 }
 
@@ -622,4 +623,398 @@ func TestHelpText_UsesGlobalDefaultsWhenNoRepoConfig(t *testing.T) {
 	// Help should show global values
 	assert.Contains(t, helpText, "GlobalTask")
 	assert.Contains(t, helpText, "GLOBAL-PROJ")
+}
+
+// --- 9.1 Help command displays configured field defaults ---
+
+func TestHelpText_ShowsFieldsSectionWhenFieldsConfigured(t *testing.T) {
+	gh := &MockGitHubClient{}
+	jira := &MockJiraClient{}
+	loader := &MockRepoConfigLoader{
+		ReturnConfig: config.RepoConfig{
+			Project: "ENG",
+			Type:    "Story",
+			Fields: map[string]interface{}{
+				"components": []interface{}{map[string]interface{}{"name": "Backend"}},
+				"priority":   map[string]interface{}{"name": "Medium"},
+				"labels":     []interface{}{"team-platform"},
+			},
+		},
+	}
+	state := &common.State{
+		Config: common.Config{
+			JiraDefaultProject:   "GLOBAL-PROJ",
+			JiraDefaultIssueType: "Task",
+		},
+		GitHubClient:     gh,
+		JiraClient:       jira,
+		RepoConfigLoader: loader,
+	}
+	ic := newIssueCommentWithRepo("/jira help", "", "myorg", "myrepo")
+
+	err := Run(context.Background(), state, ic)
+
+	require.NoError(t, err)
+	require.True(t, len(gh.Calls) >= 1)
+	helpText := gh.Calls[0].Args[3].(string)
+	// Should contain the Default fields section with field names sorted
+	assert.Contains(t, helpText, "**Default fields:** components, labels, priority")
+}
+
+func TestHelpText_OmitsFieldsSectionWhenNoFieldsConfigured(t *testing.T) {
+	gh := &MockGitHubClient{}
+	jira := &MockJiraClient{}
+	loader := &MockRepoConfigLoader{
+		ReturnConfig: config.RepoConfig{
+			Project: "ENG",
+			Type:    "Story",
+			Fields:  nil,
+		},
+	}
+	state := &common.State{
+		Config: common.Config{
+			JiraDefaultProject:   "GLOBAL-PROJ",
+			JiraDefaultIssueType: "Task",
+		},
+		GitHubClient:     gh,
+		JiraClient:       jira,
+		RepoConfigLoader: loader,
+	}
+	ic := newIssueCommentWithRepo("/jira help", "", "myorg", "myrepo")
+
+	err := Run(context.Background(), state, ic)
+
+	require.NoError(t, err)
+	require.True(t, len(gh.Calls) >= 1)
+	helpText := gh.Calls[0].Args[3].(string)
+	assert.NotContains(t, helpText, "Default fields")
+}
+
+func TestHelpText_OmitsFieldsSectionWhenFieldsMapEmpty(t *testing.T) {
+	gh := &MockGitHubClient{}
+	jira := &MockJiraClient{}
+	loader := &MockRepoConfigLoader{
+		ReturnConfig: config.RepoConfig{
+			Project: "ENG",
+			Type:    "Story",
+			Fields:  map[string]interface{}{},
+		},
+	}
+	state := &common.State{
+		Config: common.Config{
+			JiraDefaultProject:   "GLOBAL-PROJ",
+			JiraDefaultIssueType: "Task",
+		},
+		GitHubClient:     gh,
+		JiraClient:       jira,
+		RepoConfigLoader: loader,
+	}
+	ic := newIssueCommentWithRepo("/jira help", "", "myorg", "myrepo")
+
+	err := Run(context.Background(), state, ic)
+
+	require.NoError(t, err)
+	require.True(t, len(gh.Calls) >= 1)
+	helpText := gh.Calls[0].Args[3].(string)
+	assert.NotContains(t, helpText, "Default fields")
+}
+
+func TestHelpText_OmitsFieldsSectionWhenAllFieldValuesNull(t *testing.T) {
+	// Simulates a config loaded from YAML where all field values were null.
+	// ParseRepoConfig strips null values, resulting in an empty Fields map.
+	// The help command should omit the fields section in this case.
+	gh := &MockGitHubClient{}
+	jira := &MockJiraClient{}
+
+	// Parse a YAML config where all fields have null values
+	yamlData := []byte("project: ENG\ntype: Story\nfields:\n  priority: null\n  components: null\n  labels: null\n")
+	repoCfg, err := config.ParseRepoConfig(yamlData)
+	require.NoError(t, err)
+	// After parsing, Fields map should be empty (nulls stripped)
+	require.Empty(t, repoCfg.Fields)
+
+	loader := &MockRepoConfigLoader{ReturnConfig: repoCfg}
+	state := &common.State{
+		Config: common.Config{
+			JiraDefaultProject:   "GLOBAL-PROJ",
+			JiraDefaultIssueType: "Task",
+		},
+		GitHubClient:     gh,
+		JiraClient:       jira,
+		RepoConfigLoader: loader,
+	}
+	ic := newIssueCommentWithRepo("/jira help", "", "myorg", "myrepo")
+
+	err = Run(context.Background(), state, ic)
+
+	require.NoError(t, err)
+	require.True(t, len(gh.Calls) >= 1)
+	helpText := gh.Calls[0].Args[3].(string)
+	assert.NotContains(t, helpText, "Default fields")
+}
+
+func TestHelpText_ShowsOnlyFieldKeyNamesNotValues(t *testing.T) {
+	gh := &MockGitHubClient{}
+	jira := &MockJiraClient{}
+	loader := &MockRepoConfigLoader{
+		ReturnConfig: config.RepoConfig{
+			Project: "ENG",
+			Fields: map[string]interface{}{
+				"priority":          map[string]interface{}{"name": "High"},
+				"customfield_10001": "secret-value",
+			},
+		},
+	}
+	state := &common.State{
+		Config: common.Config{
+			JiraDefaultProject:   "GLOBAL-PROJ",
+			JiraDefaultIssueType: "Task",
+		},
+		GitHubClient:     gh,
+		JiraClient:       jira,
+		RepoConfigLoader: loader,
+	}
+	ic := newIssueCommentWithRepo("/jira help", "", "myorg", "myrepo")
+
+	err := Run(context.Background(), state, ic)
+
+	require.NoError(t, err)
+	require.True(t, len(gh.Calls) >= 1)
+	helpText := gh.Calls[0].Args[3].(string)
+	// Should show field names
+	assert.Contains(t, helpText, "customfield_10001")
+	assert.Contains(t, helpText, "priority")
+	// Should NOT show field values
+	assert.NotContains(t, helpText, "High")
+	assert.NotContains(t, helpText, "secret-value")
+}
+
+
+// --- loadFieldsFromCommand tests ---
+
+func TestLoadFieldsFromCommand_EmptyOptions(t *testing.T) {
+	result := loadFieldsFromCommand([]string{})
+	assert.NotNil(t, result)
+	assert.Empty(t, result)
+}
+
+func TestLoadFieldsFromCommand_SkipsReservedKeys(t *testing.T) {
+	result := loadFieldsFromCommand([]string{"project:ENG", "type:Bug", "priority:High"})
+	assert.NotContains(t, result, "project")
+	assert.NotContains(t, result, "type")
+	assert.Contains(t, result, "priority")
+}
+
+func TestLoadFieldsFromCommand_SplitsOnFirstColonOnly(t *testing.T) {
+	result := loadFieldsFromCommand([]string{"customfield_10001:value:with:colons"})
+	assert.Equal(t, "value:with:colons", result["customfield_10001"])
+}
+
+func TestLoadFieldsFromCommand_IgnoresEmptyValues(t *testing.T) {
+	result := loadFieldsFromCommand([]string{"priority:", "labels:bug-fix"})
+	assert.NotContains(t, result, "priority")
+	assert.Contains(t, result, "labels")
+}
+
+func TestLoadFieldsFromCommand_LastOccurrenceWins(t *testing.T) {
+	result := loadFieldsFromCommand([]string{"priority:Low", "priority:High"})
+	// priority is a well-known field, coerced to {"name": "High"}
+	expected := map[string]interface{}{"name": "High"}
+	assert.Equal(t, expected, result["priority"])
+}
+
+func TestLoadFieldsFromCommand_CoercesWellKnownFields(t *testing.T) {
+	result := loadFieldsFromCommand([]string{"components:Backend", "priority:High", "labels:bug-fix"})
+
+	expectedComponents := []interface{}{map[string]interface{}{"name": "Backend"}}
+	expectedPriority := map[string]interface{}{"name": "High"}
+	expectedLabels := []interface{}{"bug-fix"}
+
+	assert.Equal(t, expectedComponents, result["components"])
+	assert.Equal(t, expectedPriority, result["priority"])
+	assert.Equal(t, expectedLabels, result["labels"])
+}
+
+func TestLoadFieldsFromCommand_UnknownFieldsAsRawStrings(t *testing.T) {
+	result := loadFieldsFromCommand([]string{"customfield_10001:urgent", "customfield_10002:value"})
+	assert.Equal(t, "urgent", result["customfield_10001"])
+	assert.Equal(t, "value", result["customfield_10002"])
+}
+
+func TestLoadFieldsFromCommand_IgnoresOptionsWithoutColon(t *testing.T) {
+	result := loadFieldsFromCommand([]string{"nocolon", "priority:High"})
+	assert.Len(t, result, 1)
+	assert.Contains(t, result, "priority")
+}
+
+func TestLoadFieldsFromCommand_CapsAt20Fields(t *testing.T) {
+	options := make([]string, 25)
+	for i := 0; i < 25; i++ {
+		options[i] = fmt.Sprintf("field%d:value%d", i, i)
+	}
+	result := loadFieldsFromCommand(options)
+	assert.Len(t, result, 20)
+}
+
+func TestLoadFieldsFromCommand_CapDoesNotCountReservedKeys(t *testing.T) {
+	options := []string{"project:ENG", "type:Bug"}
+	for i := 0; i < 20; i++ {
+		options = append(options, fmt.Sprintf("field%d:value%d", i, i))
+	}
+	result := loadFieldsFromCommand(options)
+	// Should have exactly 20 fields (reserved keys not counted toward cap)
+	assert.Len(t, result, 20)
+	assert.NotContains(t, result, "project")
+	assert.NotContains(t, result, "type")
+}
+
+// --- 7.2 Executor integration tests: field overrides → coercion → merge → CreateIssue ---
+
+func TestCreateJiraIssue_FieldOverridesCoercedAndPassedToCreateIssue(t *testing.T) {
+	// Full flow: command with field overrides → coercion → merge → CreateIssue called with correct extraFields
+	gh := &MockGitHubClient{}
+	jira := &MockJiraClient{ReturnKey: "ENG-100"}
+	loader := &MockRepoConfigLoader{
+		ReturnConfig: config.RepoConfig{Project: "ENG", Type: "Task"},
+	}
+	state := newTestState(gh, jira)
+	state.RepoConfigLoader = loader
+
+	// Command includes well-known fields (priority, components, labels) and a custom field
+	ic := newIssueCommentWithRepo(
+		"/jira create priority:High components:Backend labels:bug-fix customfield_10001:urgent",
+		"Issue body", "myorg", "myrepo",
+	)
+
+	err := Run(context.Background(), state, ic)
+
+	require.NoError(t, err)
+	require.Len(t, jira.Calls, 1)
+
+	// Verify extraFields (5th argument) contains coerced well-known fields and raw custom field
+	extraFields := jira.Calls[0].Args[4].(map[string]interface{})
+	assert.Equal(t, map[string]interface{}{"name": "High"}, extraFields["priority"])
+	assert.Equal(t, []interface{}{map[string]interface{}{"name": "Backend"}}, extraFields["components"])
+	assert.Equal(t, []interface{}{"bug-fix"}, extraFields["labels"])
+	assert.Equal(t, "urgent", extraFields["customfield_10001"])
+}
+
+func TestCreateJiraIssue_RepoConfigFieldsPassedWhenNoOverrides(t *testing.T) {
+	// Repo config fields are passed to CreateIssue when no command overrides are present
+	gh := &MockGitHubClient{}
+	jira := &MockJiraClient{ReturnKey: "ENG-200"}
+	loader := &MockRepoConfigLoader{
+		ReturnConfig: config.RepoConfig{
+			Project: "ENG",
+			Type:    "Story",
+			Fields: map[string]interface{}{
+				"priority":   map[string]interface{}{"name": "Medium"},
+				"components": []interface{}{map[string]interface{}{"name": "API"}},
+				"labels":     []interface{}{"team-platform", "sprint-42"},
+			},
+		},
+	}
+	state := newTestState(gh, jira)
+	state.RepoConfigLoader = loader
+
+	// No field overrides in the command
+	ic := newIssueCommentWithRepo("/jira create", "Issue body", "myorg", "myrepo")
+
+	err := Run(context.Background(), state, ic)
+
+	require.NoError(t, err)
+	require.Len(t, jira.Calls, 1)
+
+	// Verify extraFields contains all repo config fields as-is
+	extraFields := jira.Calls[0].Args[4].(map[string]interface{})
+	assert.Equal(t, map[string]interface{}{"name": "Medium"}, extraFields["priority"])
+	assert.Equal(t, []interface{}{map[string]interface{}{"name": "API"}}, extraFields["components"])
+	assert.Equal(t, []interface{}{"team-platform", "sprint-42"}, extraFields["labels"])
+}
+
+func TestCreateJiraIssue_CommandOverridesReplaceRepoConfigFields(t *testing.T) {
+	// Command field overrides replace repo config values entirely (no deep merge)
+	gh := &MockGitHubClient{}
+	jira := &MockJiraClient{ReturnKey: "ENG-300"}
+	loader := &MockRepoConfigLoader{
+		ReturnConfig: config.RepoConfig{
+			Project: "ENG",
+			Type:    "Story",
+			Fields: map[string]interface{}{
+				"priority":          map[string]interface{}{"name": "Medium"},
+				"components":        []interface{}{map[string]interface{}{"name": "API"}, map[string]interface{}{"name": "Backend"}},
+				"labels":            []interface{}{"team-platform", "sprint-42"},
+				"customfield_10001": "default-value",
+			},
+		},
+	}
+	state := newTestState(gh, jira)
+	state.RepoConfigLoader = loader
+
+	// Command overrides priority and customfield_10001; components and labels stay from repo config
+	ic := newIssueCommentWithRepo(
+		"/jira create priority:Critical customfield_10001:override-value",
+		"Issue body", "myorg", "myrepo",
+	)
+
+	err := Run(context.Background(), state, ic)
+
+	require.NoError(t, err)
+	require.Len(t, jira.Calls, 1)
+
+	extraFields := jira.Calls[0].Args[4].(map[string]interface{})
+	// Overridden by command (coerced for well-known field)
+	assert.Equal(t, map[string]interface{}{"name": "Critical"}, extraFields["priority"])
+	// Overridden by command (raw string for custom field)
+	assert.Equal(t, "override-value", extraFields["customfield_10001"])
+	// Kept from repo config (not overridden)
+	assert.Equal(t, []interface{}{map[string]interface{}{"name": "API"}, map[string]interface{}{"name": "Backend"}}, extraFields["components"])
+	assert.Equal(t, []interface{}{"team-platform", "sprint-42"}, extraFields["labels"])
+}
+
+func TestCreateJiraIssue_EmptyExtraFieldsWhenNoConfigAndNoOverrides(t *testing.T) {
+	// When neither repo config nor command has fields, extraFields should be empty map
+	gh := &MockGitHubClient{}
+	jira := &MockJiraClient{ReturnKey: "ENG-400"}
+	loader := &MockRepoConfigLoader{
+		ReturnConfig: config.RepoConfig{Project: "ENG", Type: "Task"},
+	}
+	state := newTestState(gh, jira)
+	state.RepoConfigLoader = loader
+
+	ic := newIssueCommentWithRepo("/jira create", "Issue body", "myorg", "myrepo")
+
+	err := Run(context.Background(), state, ic)
+
+	require.NoError(t, err)
+	require.Len(t, jira.Calls, 1)
+
+	extraFields := jira.Calls[0].Args[4].(map[string]interface{})
+	assert.Empty(t, extraFields)
+}
+
+func TestCreateJiraIssue_CommandOnlyFieldsWithNoRepoConfig(t *testing.T) {
+	// Command adds new fields not present in repo config
+	gh := &MockGitHubClient{}
+	jira := &MockJiraClient{ReturnKey: "ENG-500"}
+	loader := &MockRepoConfigLoader{
+		ReturnConfig: config.RepoConfig{Project: "ENG", Type: "Task"},
+	}
+	state := newTestState(gh, jira)
+	state.RepoConfigLoader = loader
+
+	ic := newIssueCommentWithRepo(
+		"/jira create priority:High labels:hotfix",
+		"Issue body", "myorg", "myrepo",
+	)
+
+	err := Run(context.Background(), state, ic)
+
+	require.NoError(t, err)
+	require.Len(t, jira.Calls, 1)
+
+	extraFields := jira.Calls[0].Args[4].(map[string]interface{})
+	assert.Equal(t, map[string]interface{}{"name": "High"}, extraFields["priority"])
+	assert.Equal(t, []interface{}{"hotfix"}, extraFields["labels"])
+	assert.Len(t, extraFields, 2)
 }
