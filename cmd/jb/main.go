@@ -105,6 +105,8 @@ func buildOAuth2Client(cfg common.Config) common.JiraClientInterface {
 	tokenSource := k8s.NewSwitchableTokenSource(leaderSource, followerSource)
 
 	// Set up leader election with callbacks that switch between leader/follower.
+	leaderCtx, leaderCancel := context.WithCancel(context.Background())
+	_ = leaderCancel // leaderCancel will be used if we need graceful shutdown later
 	leaderElector, err := k8s.NewLeaderElector(k8sClient, k8s.LeaderElectorConfig{
 		LeaseName:      cfg.TokenLeaseName,
 		LeaseNamespace: cfg.PodNamespace,
@@ -115,10 +117,13 @@ func buildOAuth2Client(cfg common.Config) common.JiraClientInterface {
 		OnStartedLeading: func(ctx context.Context) {
 			log.Info("This pod is now the token refresh leader")
 			tokenSource.SetLeader()
+			// Start proactive refresh loop so the secret always has a valid token.
+			go leaderSource.Start(leaderCtx)
 		},
 		OnStoppedLeading: func() {
 			log.Warn("This pod lost token refresh leadership, switching to follower mode")
 			tokenSource.SetFollower()
+			leaderCancel()
 		},
 		OnNewLeader: func(identity string) {
 			if identity != cfg.PodName {

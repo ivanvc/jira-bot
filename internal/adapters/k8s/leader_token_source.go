@@ -2,6 +2,7 @@ package k8s
 
 import (
 	"context"
+	"time"
 
 	"github.com/charmbracelet/log"
 	"github.com/ivanvc/jira-bot/internal/adapters/jira"
@@ -9,6 +10,13 @@ import (
 
 // Compile-time check that LeaderTokenSource implements jira.TokenSource.
 var _ jira.TokenSource = (*LeaderTokenSource)(nil)
+
+// proactiveRefreshBuffer is how far before expiry the leader will proactively
+// refresh the token. This ensures followers always have a valid token in the secret.
+const proactiveRefreshBuffer = 5 * time.Minute
+
+// refreshCheckInterval is how often the background loop checks whether a refresh is needed.
+const refreshCheckInterval = 30 * time.Second
 
 // LeaderTokenSource wraps the existing TokenManager and persists tokens after each refresh.
 // Implements the jira.TokenSource interface.
@@ -24,6 +32,44 @@ func NewLeaderTokenSource(tm *jira.TokenManager, adapter *TokenPersistenceAdapte
 		tokenManager: tm,
 		adapter:      adapter,
 		logger:       logger,
+	}
+}
+
+// Start begins the proactive refresh loop. It checks every refreshCheckInterval whether
+// the token is within proactiveRefreshBuffer of expiry, and if so, triggers a refresh
+// and persists the new token. This ensures followers always have a valid token available.
+// Blocks until ctx is cancelled.
+func (l *LeaderTokenSource) Start(ctx context.Context) {
+	// Do an initial refresh to ensure the secret has a valid token immediately.
+	l.proactiveRefresh()
+
+	ticker := time.NewTicker(refreshCheckInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			l.proactiveRefresh()
+		}
+	}
+}
+
+// proactiveRefresh checks if the token is near expiry and refreshes it if so.
+func (l *LeaderTokenSource) proactiveRefresh() {
+	_, _, expiresAt := l.tokenManager.TokenState()
+
+	// If the token expires within the buffer window, force a refresh by clearing
+	// the cached token (setting expiry to past) and then calling Token().
+	// This is necessary because the TokenManager has its own earlyExpiryBuffer (60s)
+	// which is shorter than our proactive buffer.
+	if time.Until(expiresAt) < proactiveRefreshBuffer {
+		l.logger.Info("Proactively refreshing token before expiry", "expires_at", expiresAt)
+		l.tokenManager.SetCachedToken("", time.Time{})
+		if _, err := l.Token(); err != nil {
+			l.logger.Error("Proactive token refresh failed", "error", err)
+		}
 	}
 }
 
