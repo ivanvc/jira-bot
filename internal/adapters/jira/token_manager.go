@@ -82,6 +82,17 @@ func NewTokenManager(clientID, clientSecret, refreshToken string, opts ...TokenM
 	return tm
 }
 
+// SetCachedToken pre-seeds the access token and expiry time.
+// This allows pre-seeding the access token from the Bot_Secret on startup
+// so the first Token() call does not trigger an unnecessary refresh.
+// Safe for concurrent use by multiple goroutines.
+func (tm *TokenManager) SetCachedToken(accessToken string, expiresAt time.Time) {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	tm.accessToken = accessToken
+	tm.expiresAt = expiresAt
+}
+
 // TokenState returns the current refresh token, access token, and expiry time.
 // Safe for concurrent use by multiple goroutines.
 func (tm *TokenManager) TokenState() (refreshToken, accessToken string, expiresAt time.Time) {
