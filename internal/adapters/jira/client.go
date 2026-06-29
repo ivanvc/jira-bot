@@ -1,9 +1,11 @@
 package jira
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
-	"net/http/httputil"
+	"strings"
 
 	"github.com/andygrunwald/go-jira"
 	"github.com/charmbracelet/log"
@@ -100,8 +102,19 @@ func (c *Client) CreateIssue(project, issueType, summary, description string) (s
 	r, resp, err := c.Issue.Create(&issue)
 	if err != nil {
 		if resp != nil && resp.Response != nil {
-			respDump, _ := httputil.DumpResponse(resp.Response, true)
-			log.Error("Error creating Jira issue", "response", string(respDump))
+			// Read the response body for both logging and user-facing error details.
+			var bodyData []byte
+			if resp.Response.Body != nil {
+				bodyData, _ = io.ReadAll(resp.Response.Body)
+				resp.Response.Body.Close()
+			}
+			log.Error("Error creating Jira issue",
+				"status", resp.Response.StatusCode,
+				"body", string(bodyData),
+			)
+			if detail := parseJiraErrorBody(bodyData); detail != "" {
+				return "", fmt.Errorf("%s", detail)
+			}
 		} else {
 			log.Error("Error creating Jira issue", "error", err)
 		}
@@ -109,4 +122,39 @@ func (c *Client) CreateIssue(project, issueType, summary, description string) (s
 	}
 
 	return r.Key, nil
+}
+
+// jiraErrorResponse represents the JSON error body returned by Jira's API.
+type jiraErrorResponse struct {
+	ErrorMessages []string          `json:"errorMessages"`
+	Errors        map[string]string `json:"errors"`
+}
+
+// parseJiraErrorBody parses a Jira error response body and formats the errors
+// into a human-readable string suitable for posting as a GitHub comment.
+func parseJiraErrorBody(data []byte) string {
+	if len(data) == 0 {
+		return ""
+	}
+
+	var jiraErr jiraErrorResponse
+	if err := json.Unmarshal(data, &jiraErr); err != nil {
+		return ""
+	}
+
+	var parts []string
+	for _, msg := range jiraErr.ErrorMessages {
+		if msg != "" {
+			parts = append(parts, msg)
+		}
+	}
+	for field, msg := range jiraErr.Errors {
+		parts = append(parts, fmt.Sprintf("%s: %s", field, msg))
+	}
+
+	if len(parts) == 0 {
+		return ""
+	}
+
+	return "Jira API error: " + strings.Join(parts, "; ")
 }

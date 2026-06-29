@@ -35,6 +35,10 @@ const errorMessageFormat = `:x: Error trying to create issue.
 </details>
 `
 
+// errAlreadyCreated is a sentinel error indicating the issue was already created.
+// The caller should not post an additional error comment for this case.
+var errAlreadyCreated = errors.New("a Jira issue seems to have been already created")
+
 // Run executes the webhook and takes action if required.
 func Run(ctx context.Context, state *common.State, issueComment *github.IssueComment) error {
 	if !strings.HasPrefix(issueComment.Comment.Body, "/jira") {
@@ -59,6 +63,9 @@ func Run(ctx context.Context, state *common.State, issueComment *github.IssueCom
 		}
 	case "create":
 		if err := createJiraIssue(ctx, state, issueComment, parts[2:]); err != nil {
+			if errors.Is(err, errAlreadyCreated) {
+				return nil
+			}
 			state.GitHubClient.ReactWithConfused(ctx, issueComment.Installation.ID, issueComment)
 			errorMsg := fmt.Sprintf(errorMessageFormat, err)
 			state.GitHubClient.PostComment(ctx, issueComment.Installation.ID, issueComment, errorMsg)
@@ -103,7 +110,7 @@ func createJiraIssue(ctx context.Context, state *common.State, issueComment *git
 		if err := state.GitHubClient.PostComment(ctx, issueComment.Installation.ID, issueComment, errorAlreadyCreated); err != nil {
 			return err
 		}
-		return errors.New("a Jira issue seems to have been already created")
+		return errAlreadyCreated
 	}
 
 	// Load repo config if available

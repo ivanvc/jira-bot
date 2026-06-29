@@ -171,7 +171,7 @@ func TestRun_JiraCreateWithSpecifiedOptions(t *testing.T) {
 	assert.Equal(t, "Bug", jira.Calls[0].Args[1])
 }
 
-func TestRun_IssueWithJiraBotMarkerReturnsError(t *testing.T) {
+func TestRun_IssueWithJiraBotMarkerPostsWarningOnly(t *testing.T) {
 	gh := &MockGitHubClient{}
 	jira := &MockJiraClient{}
 	state := newTestState(gh, jira)
@@ -179,15 +179,11 @@ func TestRun_IssueWithJiraBotMarkerReturnsError(t *testing.T) {
 
 	err := Run(context.Background(), state, ic)
 
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "a Jira issue seems to have been already created")
-	// createJiraIssue posts warning, then Run's error handler calls ReactWithConfused + PostComment with error details
-	require.Len(t, gh.Calls, 3)
+	require.NoError(t, err)
+	// Should only post the warning comment, no error comment or confused reaction
+	require.Len(t, gh.Calls, 1)
 	assert.Equal(t, "PostComment", gh.Calls[0].Method)
 	assert.Contains(t, gh.Calls[0].Args[3].(string), "Uh-oh")
-	assert.Equal(t, "ReactWithConfused", gh.Calls[1].Method)
-	assert.Equal(t, "PostComment", gh.Calls[2].Method)
-	assert.Contains(t, gh.Calls[2].Args[3].(string), "Error trying to create issue")
 	// Jira should not have been called
 	assert.Empty(t, jira.Calls)
 }

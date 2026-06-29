@@ -127,3 +127,62 @@ func TestCreateIssue_DescriptionTruncation(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, "TEST-124", key)
 }
+
+func TestParseJiraErrorBody_FieldErrors(t *testing.T) {
+	body := []byte(`{"errorMessages":[],"errors":{"components":"Components is required."}}`)
+	result := parseJiraErrorBody(body)
+	assert.Contains(t, result, "Jira API error:")
+	assert.Contains(t, result, "components: Components is required.")
+}
+
+func TestParseJiraErrorBody_ErrorMessages(t *testing.T) {
+	body := []byte(`{"errorMessages":["Issue type is not valid"],"errors":{}}`)
+	result := parseJiraErrorBody(body)
+	assert.Equal(t, "Jira API error: Issue type is not valid", result)
+}
+
+func TestParseJiraErrorBody_MultipleErrors(t *testing.T) {
+	body := []byte(`{"errorMessages":["Something went wrong"],"errors":{"project":"Project is required","type":"Invalid type"}}`)
+	result := parseJiraErrorBody(body)
+	assert.Contains(t, result, "Jira API error:")
+	assert.Contains(t, result, "Something went wrong")
+	assert.Contains(t, result, "project: Project is required")
+	assert.Contains(t, result, "type: Invalid type")
+}
+
+func TestParseJiraErrorBody_EmptyBody(t *testing.T) {
+	result := parseJiraErrorBody(nil)
+	assert.Equal(t, "", result)
+
+	result = parseJiraErrorBody([]byte{})
+	assert.Equal(t, "", result)
+}
+
+func TestParseJiraErrorBody_InvalidJSON(t *testing.T) {
+	body := []byte(`not json at all`)
+	result := parseJiraErrorBody(body)
+	assert.Equal(t, "", result)
+}
+
+func TestParseJiraErrorBody_EmptyErrors(t *testing.T) {
+	body := []byte(`{"errorMessages":[],"errors":{}}`)
+	result := parseJiraErrorBody(body)
+	assert.Equal(t, "", result)
+}
+
+func TestCreateIssue_ReturnsJiraAPIError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(400)
+		w.Write([]byte(`{"errorMessages":[],"errors":{"components":"Components is required."}}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, "user", "token")
+	key, err := client.CreateIssue("TEST", "Task", "Test", "description")
+
+	assert.Error(t, err)
+	assert.Empty(t, key)
+	assert.Contains(t, err.Error(), "Jira API error:")
+	assert.Contains(t, err.Error(), "components: Components is required.")
+}
