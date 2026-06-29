@@ -24,6 +24,7 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      serviceAccountName: {{ include "jira-bot.serviceAccountName" . }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:
@@ -46,6 +47,33 @@ spec:
               port: http
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            {{- if .Values.tokenPersistence.enabled }}
+            - name: JIRA_BOT_TOKEN_SECRET_NAME
+              value: {{ default (printf "%s-oauth-token" (include "jira-bot.fullname" .)) .Values.tokenPersistence.secretName | quote }}
+            - name: JIRA_BOT_TOKEN_LEASE_NAME
+              value: {{ default (printf "%s-token-leader" (include "jira-bot.fullname" .)) .Values.tokenPersistence.leaseName | quote }}
+            {{- if .Values.tokenPersistence.pollInterval }}
+            - name: JIRA_BOT_TOKEN_POLL_INTERVAL
+              value: {{ .Values.tokenPersistence.pollInterval | quote }}
+            {{- end }}
+            {{- if .Values.tokenPersistence.leaseDuration }}
+            - name: JIRA_BOT_LEASE_DURATION
+              value: {{ .Values.tokenPersistence.leaseDuration | quote }}
+            {{- end }}
+            {{- if .Values.tokenPersistence.leaseRenewDeadline }}
+            - name: JIRA_BOT_LEASE_RENEW_DEADLINE
+              value: {{ .Values.tokenPersistence.leaseRenewDeadline | quote }}
+            {{- end }}
+            {{- end }}
           envFrom:
             - configMapRef:
                 name: {{ include "jira-bot.fullname" . }}-config

@@ -107,3 +107,21 @@ nodeSelector: {}
 tolerations: []
 
 affinity: {}
+
+# Token persistence configuration for OAuth token storage in Kubernetes
+tokenPersistence:
+  enabled: true
+  secretName: ""   # defaults to {{ fullname }}-oauth-token
+  leaseName: ""    # defaults to {{ fullname }}-token-leader
+  pollInterval: "30s"
+  leaseDuration: "15s"
+  leaseRenewDeadline: "10s"
+
+# RBAC configuration for the bot's Kubernetes permissions
+rbac:
+  create: true
+
+# ServiceAccount configuration
+serviceAccount:
+  create: true
+  name: ""  # defaults to {{ fullname }}
