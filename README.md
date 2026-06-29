@@ -73,7 +73,7 @@ The `JIRA_BOT_OAUTH_CALLBACK_URL` must match exactly what you registered in the 
 
 Copy the refresh token and set it as `JIRA_BOT_JIRA_REFRESH_TOKEN`. Once configured, restart the bot with all four OAuth variables and the setup endpoints disappear.
 
-> The refresh token remains valid as long as it's used within 90 days. The bot refreshes access tokens automatically at runtime.
+> The refresh token remains valid as long as it's used within 90 days. The bot refreshes access tokens automatically at runtime. When deployed to Kubernetes with token persistence enabled (default), the bot stores each rotated refresh token so it survives restarts indefinitely.
 
 #### 3.6 Get Your Cloud ID
 
@@ -131,6 +131,15 @@ helm install jira-bot charts/jira-bot \
   --set config.jira.defaultIssueType="Task"
 ```
 
+Token persistence and leader election are enabled by default. To disable:
+
+```bash
+helm install jira-bot charts/jira-bot \
+  ... \
+  --set tokenPersistence.enabled=false \
+  --set rbac.create=false
+```
+
 ## Authentication Modes
 
 The bot supports two authentication modes:
@@ -141,6 +150,55 @@ The bot supports two authentication modes:
 | **Basic Auth** (legacy) | `JIRA_BOT_JIRA_BASE_URL`, `JIRA_BOT_JIRA_USERNAME`, `JIRA_BOT_JIRA_TOKEN` | PAT expires every 90 days. Requires manual rotation. |
 
 The bot detects the mode at startup. If all four OAuth variables are set, it uses OAuth 2.0. Otherwise it falls back to basic auth.
+
+## Token Persistence (Multi-Replica)
+
+When running with multiple replicas in Kubernetes, the bot automatically persists rotated OAuth tokens to a bot-managed Kubernetes secret. This prevents token loss across restarts and avoids refresh token conflicts between pods.
+
+### How It Works
+
+- **Leader election**: One pod acquires a Kubernetes Lease and becomes the sole token refresher. This prevents multiple pods from racing against Atlassian's rotating refresh token.
+- **Token persistence**: After each token refresh, the leader writes the new refresh token, access token, and expiry to a separate Kubernetes secret (not the Helm-managed one).
+- **Follower polling**: Non-leader pods poll the bot-managed secret (default every 30s) and use the access token directly without calling Atlassian.
+- **Startup recovery**: On restart, the bot reads the latest persisted refresh token from the secret, so it always has the most recent rotation — even if 90+ days have passed since the original env var token was issued.
+
+### Graceful Degradation
+
+Token persistence activates automatically when the bot detects it's running in Kubernetes (via `POD_NAME` and `POD_NAMESPACE` from the downward API). When running outside Kubernetes (e.g., local development), the bot falls back to its standard behavior — keeping tokens in memory and using the env var refresh token.
+
+If RBAC permissions are missing or the Kubernetes API is unreachable, the bot logs a warning and continues operating without persistence.
+
+### Configuration
+
+Token persistence is controlled through these Helm values:
+
+| Value | Default | Description |
+|-------|---------|-------------|
+| `tokenPersistence.enabled` | `true` | Enable/disable token persistence |
+| `tokenPersistence.secretName` | `{{ fullname }}-oauth-token` | Name of the bot-managed secret |
+| `tokenPersistence.leaseName` | `{{ fullname }}-token-leader` | Name of the leader election lease |
+| `tokenPersistence.pollInterval` | `30s` | How often non-leader pods poll for token updates |
+| `tokenPersistence.leaseDuration` | `15s` | Lease duration for leader election |
+| `tokenPersistence.leaseRenewDeadline` | `10s` | Lease renewal deadline |
+| `rbac.create` | `true` | Create ServiceAccount, Role, and RoleBinding |
+| `serviceAccount.create` | `true` | Create a ServiceAccount for the bot |
+| `serviceAccount.name` | `{{ fullname }}` | ServiceAccount name override |
+
+The RBAC resources grant the bot `get`, `create`, and `update` permissions on secrets and leases within its namespace.
+
+### Environment Variables (injected by Helm)
+
+These are set automatically by the Helm chart via the downward API and values:
+
+| Variable | Source | Description |
+|----------|--------|-------------|
+| `POD_NAME` | Downward API | Current pod name (identity for leader election) |
+| `POD_NAMESPACE` | Downward API | Current namespace |
+| `JIRA_BOT_TOKEN_SECRET_NAME` | Helm values | Bot-managed secret name |
+| `JIRA_BOT_TOKEN_LEASE_NAME` | Helm values | Leader election lease name |
+| `JIRA_BOT_TOKEN_POLL_INTERVAL` | Helm values | Poll interval for non-leader pods |
+| `JIRA_BOT_LEASE_DURATION` | Helm values | Lease duration |
+| `JIRA_BOT_LEASE_RENEW_DEADLINE` | Helm values | Lease renewal deadline |
 
 ## Usage
 
