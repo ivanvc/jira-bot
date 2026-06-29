@@ -27,6 +27,7 @@ const errorMessageFormat = `:x: Error trying to create issue.
 
 <details>
 <summary>Error</summary>
+
 ` + "```" + `
 %s
 ` + "```" + `
