@@ -12,7 +12,7 @@ A GitHub App that creates Jira issues when you post `/jira create` comments in G
    - **App name**: `jira-bot`
    - **Webhook URL**: `https://<your-bot-host>/webhooks/github/payload`
    - **Webhook secret**: Generate using `openssl rand -hex 20`
-   - **Permissions**: Issues (Read & write), Issue comments (Read & write)
+   - **Permissions**: Issues (Read & write), Issue comments (Read & write), Contents (Read-only)
    - **Subscribe to events**: Issue comments
 4. Generate and download private key
 5. Note the App ID
