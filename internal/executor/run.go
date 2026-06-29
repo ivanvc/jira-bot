@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/log"
 	"github.com/ivanvc/jira-bot/internal/adapters/github"
 	"github.com/ivanvc/jira-bot/internal/common"
 )
@@ -74,7 +75,25 @@ func Run(ctx context.Context, state *common.State, issueComment *github.IssueCom
 }
 
 func replyWithHelp(ctx context.Context, state *common.State, issueComment *github.IssueComment) error {
-	helpText := fmt.Sprintf(helpTextFormat, state.Config.JiraDefaultIssueType, state.Config.JiraDefaultProject)
+	defaultType := state.Config.JiraDefaultIssueType
+	defaultProject := state.Config.JiraDefaultProject
+
+	if state.RepoConfigLoader != nil {
+		repoCfg, err := state.RepoConfigLoader.LoadRepoConfig(
+			ctx,
+			issueComment.Installation.ID,
+			issueComment.Repository.Owner.Login,
+			issueComment.Repository.Name,
+		)
+		if err != nil {
+			log.Error("Error loading repo config for help", "error", err)
+		} else {
+			defaultType = resolveOption("", repoCfg.Type, state.Config.JiraDefaultIssueType)
+			defaultProject = resolveOption("", repoCfg.Project, state.Config.JiraDefaultProject)
+		}
+	}
+
+	helpText := fmt.Sprintf(helpTextFormat, defaultType, defaultProject)
 	return state.GitHubClient.PostComment(ctx, issueComment.Installation.ID, issueComment, helpText)
 }
 
@@ -87,8 +106,27 @@ func createJiraIssue(ctx context.Context, state *common.State, issueComment *git
 		return errors.New("a Jira issue seems to have been already created")
 	}
 
-	project := loadOptionWithDefault("project", state.Config.JiraDefaultProject, options)
-	issueType := loadOptionWithDefault("type", state.Config.JiraDefaultIssueType, options)
+	// Load repo config if available
+	var repoProject, repoType string
+	if state.RepoConfigLoader != nil {
+		repoCfg, err := state.RepoConfigLoader.LoadRepoConfig(
+			ctx,
+			issueComment.Installation.ID,
+			issueComment.Repository.Owner.Login,
+			issueComment.Repository.Name,
+		)
+		if err != nil {
+			return fmt.Errorf("loading repo config: %w", err)
+		}
+		repoProject = repoCfg.Project
+		repoType = repoCfg.Type
+	}
+
+	commandProject := loadOptionFromCommand("project", options)
+	commandType := loadOptionFromCommand("type", options)
+
+	project := resolveOption(commandProject, repoProject, state.Config.JiraDefaultProject)
+	issueType := resolveOption(commandType, repoType, state.Config.JiraDefaultIssueType)
 
 	if state.JiraClient == nil {
 		return errors.New("Jira client is not configured (bot is in setup mode)")
@@ -106,12 +144,35 @@ func createJiraIssue(ctx context.Context, state *common.State, issueComment *git
 	return state.GitHubClient.PostComment(ctx, issueComment.Installation.ID, issueComment, fmt.Sprintf(successTextFormat, key))
 }
 
-func loadOptionWithDefault(option, fallback string, values []string) string {
+// resolveOption returns the first non-empty value in priority order:
+// command option > repo config > global config.
+func resolveOption(commandValue, repoConfigValue, globalValue string) string {
+	if commandValue != "" {
+		return commandValue
+	}
+	if repoConfigValue != "" {
+		return repoConfigValue
+	}
+	return globalValue
+}
+
+// loadOptionFromCommand extracts a named option value from command arguments.
+// Returns an empty string if the option is not found or has an empty value.
+func loadOptionFromCommand(option string, values []string) string {
 	for _, v := range values {
 		pair := strings.Split(v, ":")
 		if pair[0] == option && len(pair) > 1 && pair[1] != "" {
 			return pair[1]
 		}
+	}
+	return ""
+}
+
+// loadOptionWithDefault extracts a named option from values, returning fallback if not found.
+// Kept for backward compatibility.
+func loadOptionWithDefault(option, fallback string, values []string) string {
+	if v := loadOptionFromCommand(option, values); v != "" {
+		return v
 	}
 	return fallback
 }

@@ -7,6 +7,7 @@ import (
 
 	"github.com/ivanvc/jira-bot/internal/adapters/github"
 	"github.com/ivanvc/jira-bot/internal/common"
+	"github.com/ivanvc/jira-bot/internal/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -267,4 +268,362 @@ func TestLoadOptionWithDefault_EmptyValueReturnsFallback(t *testing.T) {
 func TestLoadOptionWithDefault_MultipleKeysReturnsFirstMatch(t *testing.T) {
 	result := loadOptionWithDefault("project", "FALLBACK", []string{"project:FIRST", "project:SECOND"})
 	assert.Equal(t, "FIRST", result)
+}
+
+// --- 5.2 replyWithHelp with repo config tests ---
+
+// MockRepoConfigLoader implements common.RepoConfigLoaderInterface for testing.
+type MockRepoConfigLoader struct {
+	ReturnConfig config.RepoConfig
+	ReturnErr    error
+	Calls        []MockCall
+}
+
+func (m *MockRepoConfigLoader) LoadRepoConfig(ctx context.Context, installationID int64, owner, repo string) (config.RepoConfig, error) {
+	m.Calls = append(m.Calls, MockCall{Method: "LoadRepoConfig", Args: []interface{}{ctx, installationID, owner, repo}})
+	return m.ReturnConfig, m.ReturnErr
+}
+
+// Helper to build an IssueComment with repository info.
+func newIssueCommentWithRepo(commentBody, issueBody, owner, repoName string) *github.IssueComment {
+	return &github.IssueComment{
+		Action: "created",
+		Issue: github.Issue{
+			Title:   "Test Issue",
+			Body:    issueBody,
+			HTMLURL: "https://github.com/" + owner + "/" + repoName + "/issues/1",
+		},
+		Comment: github.Comment{
+			Body:   commentBody,
+			NodeID: "node123",
+			ID:     1,
+		},
+		Installation: github.Installation{ID: 42},
+		Repository: github.Repository{
+			Owner:    github.RepositoryOwner{Login: owner},
+			Name:     repoName,
+			FullName: owner + "/" + repoName,
+		},
+	}
+}
+
+func TestReplyWithHelp_ShowsRepoConfigProjectAsDefault(t *testing.T) {
+	gh := &MockGitHubClient{}
+	jira := &MockJiraClient{}
+	loader := &MockRepoConfigLoader{
+		ReturnConfig: config.RepoConfig{Project: "REPO-PROJ"},
+	}
+	state := newTestState(gh, jira)
+	state.RepoConfigLoader = loader
+	ic := newIssueCommentWithRepo("/jira help", "", "myorg", "myrepo")
+
+	err := Run(context.Background(), state, ic)
+
+	require.NoError(t, err)
+	require.Len(t, loader.Calls, 1)
+	assert.Equal(t, int64(42), loader.Calls[0].Args[1])
+	assert.Equal(t, "myorg", loader.Calls[0].Args[2])
+	assert.Equal(t, "myrepo", loader.Calls[0].Args[3])
+
+	// Help text should show repo config project
+	require.True(t, len(gh.Calls) >= 1)
+	helpText := gh.Calls[0].Args[3].(string)
+	assert.Contains(t, helpText, "REPO-PROJ")
+}
+
+func TestReplyWithHelp_ShowsRepoConfigTypeAsDefault(t *testing.T) {
+	gh := &MockGitHubClient{}
+	jira := &MockJiraClient{}
+	loader := &MockRepoConfigLoader{
+		ReturnConfig: config.RepoConfig{Type: "Bug"},
+	}
+	state := newTestState(gh, jira)
+	state.RepoConfigLoader = loader
+	ic := newIssueCommentWithRepo("/jira help", "", "myorg", "myrepo")
+
+	err := Run(context.Background(), state, ic)
+
+	require.NoError(t, err)
+
+	helpText := gh.Calls[0].Args[3].(string)
+	assert.Contains(t, helpText, "Bug")
+}
+
+func TestReplyWithHelp_FallsBackToGlobalConfigWhenNoRepoConfig(t *testing.T) {
+	gh := &MockGitHubClient{}
+	jira := &MockJiraClient{}
+	loader := &MockRepoConfigLoader{
+		ReturnConfig: config.RepoConfig{}, // empty - no repo config
+	}
+	state := newTestState(gh, jira)
+	state.RepoConfigLoader = loader
+	ic := newIssueCommentWithRepo("/jira help", "", "myorg", "myrepo")
+
+	err := Run(context.Background(), state, ic)
+
+	require.NoError(t, err)
+
+	// Help text should show global defaults
+	helpText := gh.Calls[0].Args[3].(string)
+	assert.Contains(t, helpText, "Task")    // global JiraDefaultIssueType
+	assert.Contains(t, helpText, "DEFAULT") // global JiraDefaultProject
+}
+
+func TestReplyWithHelp_FallsBackToGlobalConfigWhenLoaderIsNil(t *testing.T) {
+	gh := &MockGitHubClient{}
+	jira := &MockJiraClient{}
+	state := newTestState(gh, jira)
+	// state.RepoConfigLoader is nil by default
+	ic := newIssueCommentWithRepo("/jira help", "", "myorg", "myrepo")
+
+	err := Run(context.Background(), state, ic)
+
+	require.NoError(t, err)
+
+	helpText := gh.Calls[0].Args[3].(string)
+	assert.Contains(t, helpText, "Task")    // global JiraDefaultIssueType
+	assert.Contains(t, helpText, "DEFAULT") // global JiraDefaultProject
+}
+
+func TestReplyWithHelp_FallsBackToGlobalConfigOnLoaderError(t *testing.T) {
+	gh := &MockGitHubClient{}
+	jira := &MockJiraClient{}
+	loader := &MockRepoConfigLoader{
+		ReturnErr: errors.New("API error"),
+	}
+	state := newTestState(gh, jira)
+	state.RepoConfigLoader = loader
+	ic := newIssueCommentWithRepo("/jira help", "", "myorg", "myrepo")
+
+	err := Run(context.Background(), state, ic)
+
+	require.NoError(t, err)
+
+	// Help text should show global defaults on error
+	helpText := gh.Calls[0].Args[3].(string)
+	assert.Contains(t, helpText, "Task")    // global JiraDefaultIssueType
+	assert.Contains(t, helpText, "DEFAULT") // global JiraDefaultProject
+}
+
+// --- 5.4 Executor integration tests for createJiraIssue with repo config ---
+
+func TestCreateJiraIssue_UsesRepoConfigWhenCommandOptionAbsent(t *testing.T) {
+	gh := &MockGitHubClient{}
+	jira := &MockJiraClient{ReturnKey: "REPO-101"}
+	loader := &MockRepoConfigLoader{
+		ReturnConfig: config.RepoConfig{Project: "REPO-PROJ", Type: "Story"},
+	}
+	state := newTestState(gh, jira)
+	state.RepoConfigLoader = loader
+	ic := newIssueCommentWithRepo("/jira create", "Issue body", "myorg", "myrepo")
+
+	err := Run(context.Background(), state, ic)
+
+	require.NoError(t, err)
+	// Repo config loader should be called with correct args
+	require.Len(t, loader.Calls, 1)
+	assert.Equal(t, int64(42), loader.Calls[0].Args[1])
+	assert.Equal(t, "myorg", loader.Calls[0].Args[2])
+	assert.Equal(t, "myrepo", loader.Calls[0].Args[3])
+	// Jira CreateIssue should use repo config values
+	require.Len(t, jira.Calls, 1)
+	assert.Equal(t, "REPO-PROJ", jira.Calls[0].Args[0]) // project from repo config
+	assert.Equal(t, "Story", jira.Calls[0].Args[1])     // type from repo config
+}
+
+func TestCreateJiraIssue_CommandOptionOverridesRepoConfig(t *testing.T) {
+	gh := &MockGitHubClient{}
+	jira := &MockJiraClient{ReturnKey: "CMD-202"}
+	loader := &MockRepoConfigLoader{
+		ReturnConfig: config.RepoConfig{Project: "REPO-PROJ", Type: "Story"},
+	}
+	state := newTestState(gh, jira)
+	state.RepoConfigLoader = loader
+	ic := newIssueCommentWithRepo("/jira create project:CMD-PROJ type:Bug", "Issue body", "myorg", "myrepo")
+
+	err := Run(context.Background(), state, ic)
+
+	require.NoError(t, err)
+	// Jira CreateIssue should use command option values, not repo config
+	require.Len(t, jira.Calls, 1)
+	assert.Equal(t, "CMD-PROJ", jira.Calls[0].Args[0]) // project from command
+	assert.Equal(t, "Bug", jira.Calls[0].Args[1])      // type from command
+}
+
+func TestCreateJiraIssue_RepoConfigOverridesGlobalConfig(t *testing.T) {
+	gh := &MockGitHubClient{}
+	jira := &MockJiraClient{ReturnKey: "REPO-303"}
+	loader := &MockRepoConfigLoader{
+		ReturnConfig: config.RepoConfig{Project: "REPO-PROJ", Type: "Epic"},
+	}
+	state := &common.State{
+		Config: common.Config{
+			JiraDefaultProject:   "GLOBAL-PROJ",
+			JiraDefaultIssueType: "Task",
+		},
+		GitHubClient:     gh,
+		JiraClient:       jira,
+		RepoConfigLoader: loader,
+	}
+	ic := newIssueCommentWithRepo("/jira create", "Issue body", "myorg", "myrepo")
+
+	err := Run(context.Background(), state, ic)
+
+	require.NoError(t, err)
+	// Jira CreateIssue should use repo config, not global config
+	require.Len(t, jira.Calls, 1)
+	assert.Equal(t, "REPO-PROJ", jira.Calls[0].Args[0]) // repo config overrides GLOBAL-PROJ
+	assert.Equal(t, "Epic", jira.Calls[0].Args[1])      // repo config overrides Task
+}
+
+func TestCreateJiraIssue_NilRepoConfigLoaderFallsBackToGlobalDefaults(t *testing.T) {
+	gh := &MockGitHubClient{}
+	jira := &MockJiraClient{ReturnKey: "DEFAULT-404"}
+	state := &common.State{
+		Config: common.Config{
+			JiraDefaultProject:   "GLOBAL-PROJ",
+			JiraDefaultIssueType: "Task",
+		},
+		GitHubClient: gh,
+		JiraClient:   jira,
+		// RepoConfigLoader is nil
+	}
+	ic := newIssueCommentWithRepo("/jira create", "Issue body", "myorg", "myrepo")
+
+	err := Run(context.Background(), state, ic)
+
+	require.NoError(t, err)
+	// Jira CreateIssue should use global defaults
+	require.Len(t, jira.Calls, 1)
+	assert.Equal(t, "GLOBAL-PROJ", jira.Calls[0].Args[0]) // global project
+	assert.Equal(t, "Task", jira.Calls[0].Args[1])        // global type
+}
+
+func TestCreateJiraIssue_PartialRepoConfig_ProjectOnly(t *testing.T) {
+	gh := &MockGitHubClient{}
+	jira := &MockJiraClient{ReturnKey: "PARTIAL-505"}
+	loader := &MockRepoConfigLoader{
+		ReturnConfig: config.RepoConfig{Project: "REPO-PROJ"}, // Type is empty
+	}
+	state := &common.State{
+		Config: common.Config{
+			JiraDefaultProject:   "GLOBAL-PROJ",
+			JiraDefaultIssueType: "Task",
+		},
+		GitHubClient:     gh,
+		JiraClient:       jira,
+		RepoConfigLoader: loader,
+	}
+	ic := newIssueCommentWithRepo("/jira create", "Issue body", "myorg", "myrepo")
+
+	err := Run(context.Background(), state, ic)
+
+	require.NoError(t, err)
+	require.Len(t, jira.Calls, 1)
+	assert.Equal(t, "REPO-PROJ", jira.Calls[0].Args[0]) // project from repo config
+	assert.Equal(t, "Task", jira.Calls[0].Args[1])      // type falls back to global
+}
+
+func TestCreateJiraIssue_PartialRepoConfig_TypeOnly(t *testing.T) {
+	gh := &MockGitHubClient{}
+	jira := &MockJiraClient{ReturnKey: "PARTIAL-606"}
+	loader := &MockRepoConfigLoader{
+		ReturnConfig: config.RepoConfig{Type: "Bug"}, // Project is empty
+	}
+	state := &common.State{
+		Config: common.Config{
+			JiraDefaultProject:   "GLOBAL-PROJ",
+			JiraDefaultIssueType: "Task",
+		},
+		GitHubClient:     gh,
+		JiraClient:       jira,
+		RepoConfigLoader: loader,
+	}
+	ic := newIssueCommentWithRepo("/jira create", "Issue body", "myorg", "myrepo")
+
+	err := Run(context.Background(), state, ic)
+
+	require.NoError(t, err)
+	require.Len(t, jira.Calls, 1)
+	assert.Equal(t, "GLOBAL-PROJ", jira.Calls[0].Args[0]) // project falls back to global
+	assert.Equal(t, "Bug", jira.Calls[0].Args[1])         // type from repo config
+}
+
+func TestCreateJiraIssue_CommandOptionOverridesPartialRepoConfig(t *testing.T) {
+	gh := &MockGitHubClient{}
+	jira := &MockJiraClient{ReturnKey: "MIX-707"}
+	loader := &MockRepoConfigLoader{
+		ReturnConfig: config.RepoConfig{Project: "REPO-PROJ", Type: "Story"},
+	}
+	state := &common.State{
+		Config: common.Config{
+			JiraDefaultProject:   "GLOBAL-PROJ",
+			JiraDefaultIssueType: "Task",
+		},
+		GitHubClient:     gh,
+		JiraClient:       jira,
+		RepoConfigLoader: loader,
+	}
+	// Only override project via command, type should come from repo config
+	ic := newIssueCommentWithRepo("/jira create project:CMD-PROJ", "Issue body", "myorg", "myrepo")
+
+	err := Run(context.Background(), state, ic)
+
+	require.NoError(t, err)
+	require.Len(t, jira.Calls, 1)
+	assert.Equal(t, "CMD-PROJ", jira.Calls[0].Args[0]) // project from command
+	assert.Equal(t, "Story", jira.Calls[0].Args[1])    // type from repo config (not global)
+}
+
+func TestHelpText_ReflectsRepoLevelDefaults(t *testing.T) {
+	gh := &MockGitHubClient{}
+	jira := &MockJiraClient{}
+	loader := &MockRepoConfigLoader{
+		ReturnConfig: config.RepoConfig{Project: "TEAM-X", Type: "Enhancement"},
+	}
+	state := &common.State{
+		Config: common.Config{
+			JiraDefaultProject:   "GLOBAL-PROJ",
+			JiraDefaultIssueType: "Task",
+		},
+		GitHubClient:     gh,
+		JiraClient:       jira,
+		RepoConfigLoader: loader,
+	}
+	ic := newIssueCommentWithRepo("/jira help", "", "myorg", "myrepo")
+
+	err := Run(context.Background(), state, ic)
+
+	require.NoError(t, err)
+	require.True(t, len(gh.Calls) >= 1)
+	helpText := gh.Calls[0].Args[3].(string)
+	// Help should show repo config values, not global
+	assert.Contains(t, helpText, "Enhancement")
+	assert.Contains(t, helpText, "TEAM-X")
+	assert.NotContains(t, helpText, "GLOBAL-PROJ")
+	assert.NotContains(t, helpText, "Task")
+}
+
+func TestHelpText_UsesGlobalDefaultsWhenNoRepoConfig(t *testing.T) {
+	gh := &MockGitHubClient{}
+	jira := &MockJiraClient{}
+	state := &common.State{
+		Config: common.Config{
+			JiraDefaultProject:   "GLOBAL-PROJ",
+			JiraDefaultIssueType: "GlobalTask",
+		},
+		GitHubClient: gh,
+		JiraClient:   jira,
+		// RepoConfigLoader is nil
+	}
+	ic := newIssueCommentWithRepo("/jira help", "", "myorg", "myrepo")
+
+	err := Run(context.Background(), state, ic)
+
+	require.NoError(t, err)
+	require.True(t, len(gh.Calls) >= 1)
+	helpText := gh.Calls[0].Args[3].(string)
+	// Help should show global values
+	assert.Contains(t, helpText, "GlobalTask")
+	assert.Contains(t, helpText, "GLOBAL-PROJ")
 }
