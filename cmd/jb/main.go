@@ -13,6 +13,7 @@ import (
 	"github.com/ivanvc/jira-bot/internal/adapters/jira"
 	"github.com/ivanvc/jira-bot/internal/adapters/k8s"
 	"github.com/ivanvc/jira-bot/internal/common"
+	"github.com/ivanvc/jira-bot/internal/config"
 	"github.com/ivanvc/jira-bot/internal/http"
 )
 
@@ -36,9 +37,10 @@ func main() {
 	}
 
 	state := &common.State{
-		Config:       cfg,
-		GitHubClient: githubClient,
-		JiraClient:   jiraClient,
+		Config:           cfg,
+		GitHubClient:     githubClient,
+		JiraClient:       jiraClient,
+		RepoConfigLoader: config.NewLoader(githubClient),
 	}
 
 	s := http.NewServer(state)
