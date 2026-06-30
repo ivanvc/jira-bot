@@ -20,6 +20,18 @@ import (
 	"github.com/ivanvc/jira-bot/internal/http"
 )
 
+func init() {
+	// Wire up the production BotSecretReader factory that uses an in-cluster K8s client.
+	common.NewBotSecretReader = func(namespace, secretName string) (common.BotSecretReader, error) {
+		k8sClient, err := buildK8sClient()
+		if err != nil {
+			return nil, err
+		}
+		logger := log.Default()
+		return k8s.NewTokenPersistenceAdapter(k8sClient, namespace, secretName, logger), nil
+	}
+}
+
 func main() {
 	cfg := common.LoadConfig()
 
