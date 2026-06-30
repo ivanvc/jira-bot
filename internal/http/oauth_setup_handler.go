@@ -17,6 +17,12 @@ import (
 	"github.com/ivanvc/jira-bot/internal/adapters/k8s"
 )
 
+// TransitionCoordinatorInterface abstracts the TransitionCoordinator to break
+// the import cycle between internal/http and internal/transition.
+type TransitionCoordinatorInterface interface {
+	Transition(tokenData k8s.TokenData) error
+}
+
 // oauthSetupHandler provides endpoints for the one-time OAuth 2.0 token
 // exchange during initial setup. It is only registered when client credentials
 // are configured but no refresh token is present yet.
@@ -24,7 +30,8 @@ type oauthSetupHandler struct {
 	clientID     string
 	clientSecret string
 	callbackURL  string
-	persistence  *k8s.TokenPersistenceAdapter // nil when K8s unavailable
+	persistence  *k8s.TokenPersistenceAdapter    // nil when K8s unavailable
+	coordinator  TransitionCoordinatorInterface  // nil when not in setup mode or not wired
 }
 
 // pendingSetup holds token data for in-progress multi-site setup flows.
@@ -287,6 +294,11 @@ func (h *oauthSetupHandler) handleCallback(w http.ResponseWriter, req *http.Requ
 // persistAndRespond attempts to write tokens + Cloud ID to the Bot_Secret.
 // If the adapter is nil or the write fails, it renders a hard error page with
 // instructions. Tokens are NEVER displayed to the user.
+//
+// After successful persistence, it attempts a live transition via the
+// TransitionCoordinator. If the transition succeeds, the success page indicates
+// no restart is needed. If it fails, a fallback page instructs the operator to
+// restart the pod.
 func (h *oauthSetupHandler) persistAndRespond(w http.ResponseWriter, refreshToken, accessToken string, expiresAt time.Time, cloudID string) {
 	if h.persistence == nil {
 		renderHardErrorPage(w,
@@ -314,6 +326,19 @@ func (h *oauthSetupHandler) persistAndRespond(w http.ResponseWriter, refreshToke
 		return
 	}
 
+	// Attempt live transition if coordinator is wired.
+	if h.coordinator != nil {
+		if err := h.coordinator.Transition(tokenData); err != nil {
+			log.Error("Live transition failed after token persistence", "error", err)
+			renderTransitionFailurePage(w, cloudID)
+			return
+		}
+		renderTransitionSuccessPage(w, cloudID)
+		return
+	}
+
+	// No coordinator available — fall back to the legacy success page
+	// instructing the operator to restart the pod.
 	renderSuccessPage(w, cloudID)
 }
 
@@ -338,6 +363,7 @@ After fixing the issue above, re-run the OAuth authorization flow to complete se
 
 // renderSuccessPage renders the success page after tokens are persisted.
 // It does NOT display the refresh token or access token (Requirement 4.4).
+// This is the legacy page used when no TransitionCoordinator is available.
 func renderSuccessPage(w http.ResponseWriter, cloudID string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprintf(w, `<!DOCTYPE html>
@@ -349,6 +375,44 @@ func renderSuccessPage(w http.ResponseWriter, cloudID string) {
 <p><strong>Cloud ID:</strong> <code>%s</code></p>
 <p style="background: #e8f5e9; padding: 12px; border-radius: 4px;">
 &#9888; Please restart the pod to activate normal operation mode.
+</p>
+</body>
+</html>`, cloudID)
+}
+
+// renderTransitionSuccessPage renders the success page when the live transition
+// from setup to oauth2 mode succeeded. No restart is required.
+// Requirement 6.1: states the bot is now operational and no pod restart is required.
+func renderTransitionSuccessPage(w http.ResponseWriter, cloudID string) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	fmt.Fprintf(w, `<!DOCTYPE html>
+<html>
+<head><title>Jira Bot — Operational</title></head>
+<body style="font-family: system-ui, sans-serif; max-width: 600px; margin: 40px auto; padding: 0 20px;">
+<h1 style="color: #2e7d32;">&#10004; Bot Is Operational</h1>
+<p>OAuth tokens have been persisted and the bot has transitioned to oauth2 mode.</p>
+<p><strong>Cloud ID:</strong> <code>%s</code></p>
+<p style="background: #e8f5e9; padding: 12px; border-radius: 4px;">
+The bot is now operational &mdash; no pod restart is required.
+</p>
+</body>
+</html>`, cloudID)
+}
+
+// renderTransitionFailurePage renders the fallback page when tokens were
+// persisted but the live transition failed. Instructs the operator to restart.
+// Requirement 6.2: confirms tokens were persisted and instructs restart.
+func renderTransitionFailurePage(w http.ResponseWriter, cloudID string) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	fmt.Fprintf(w, `<!DOCTYPE html>
+<html>
+<head><title>Jira Bot — Restart Required</title></head>
+<body style="font-family: system-ui, sans-serif; max-width: 600px; margin: 40px auto; padding: 0 20px;">
+<h1 style="color: #f57c00;">&#9888; Restart Required</h1>
+<p>OAuth tokens have been persisted to the Bot Secret, but the live transition could not be completed.</p>
+<p><strong>Cloud ID:</strong> <code>%s</code></p>
+<p style="background: #fff3e0; padding: 12px; border-radius: 4px;">
+Please restart the pod to activate oauth2 mode.
 </p>
 </body>
 </html>`, cloudID)

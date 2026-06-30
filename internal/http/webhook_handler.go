@@ -11,6 +11,7 @@ import (
 
 	"github.com/charmbracelet/log"
 	"github.com/ivanvc/jira-bot/internal/adapters/github"
+	"github.com/ivanvc/jira-bot/internal/common"
 	"github.com/ivanvc/jira-bot/internal/executor"
 )
 
@@ -24,6 +25,13 @@ func (h *webhookHandler) registerHandler(s *Server) {
 
 // Handles the HTTP request.
 func (h *webhookHandler) handle(s *Server) func(http.ResponseWriter, *http.Request) {
+	return h.handleWithState(s.State)
+}
+
+// handleWithState returns an HTTP handler function that processes webhook
+// requests using the provided State. This enables registration on any ServeMux
+// without requiring the full Server struct.
+func (h *webhookHandler) handleWithState(state *common.State) func(http.ResponseWriter, *http.Request) {
 	return func(w http.ResponseWriter, req *http.Request) {
 		if req.Method != http.MethodPost {
 			w.WriteHeader(http.StatusMethodNotAllowed)
@@ -37,7 +45,7 @@ func (h *webhookHandler) handle(s *Server) func(http.ResponseWriter, *http.Reque
 			return
 		}
 
-		if !h.verifySignature(body, req.Header.Get("X-Hub-Signature-256"), s.State.Config.GitHubWebhookSecret) {
+		if !h.verifySignature(body, req.Header.Get("X-Hub-Signature-256"), state.Config.GitHubWebhookSecret) {
 			log.Error("Invalid webhook signature")
 			w.WriteHeader(http.StatusUnauthorized)
 			return
@@ -57,7 +65,7 @@ func (h *webhookHandler) handle(s *Server) func(http.ResponseWriter, *http.Reque
 				return
 			}
 
-			if err := executor.Run(req.Context(), s.State, &ic); err != nil {
+			if err := executor.Run(req.Context(), state, &ic); err != nil {
 				log.Error("Error executing webhook", "error", err)
 				w.WriteHeader(http.StatusNotAcceptable)
 				return

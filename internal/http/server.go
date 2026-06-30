@@ -10,23 +10,43 @@ import (
 type Server struct {
 	*http.Server
 	*common.State
+	Mux *SwitchableMux
 }
 
-// New returns a new Server.
-func NewServer(common *common.State) *Server {
+// NewServer returns a new Server. It selects the appropriate mux based on the
+// current AuthMode and wraps it in a SwitchableMux so that routes can be
+// atomically swapped later (e.g., after an OAuth setup-to-oauth2 transition).
+// The coordinator parameter is optional (nil for non-setup modes); when provided
+// in setup mode, it is forwarded to BuildSetupMux so the setup handler can
+// trigger a live transition after successful token persistence.
+func NewServer(state *common.State, coordinator TransitionCoordinatorInterface) *Server {
 	stdlog := log.Default().StandardLog(log.StandardLogOptions{
 		ForceLevel: log.ErrorLevel,
 	})
-	return &Server{&http.Server{
-		Addr:     common.Config.ListenHTTP,
-		ErrorLog: stdlog,
-	}, common}
+
+	var initialMux *http.ServeMux
+	if state.Config.AuthMode == "oauth2-setup" {
+		initialMux = BuildSetupMux(state, coordinator)
+	} else {
+		initialMux = BuildOAuth2Mux(state)
+	}
+
+	switchable := NewSwitchableMux(initialMux)
+
+	return &Server{
+		Server: &http.Server{
+			Addr:     state.Config.ListenHTTP,
+			Handler:  switchable,
+			ErrorLog: stdlog,
+		},
+		State: state,
+		Mux:   switchable,
+	}
 }
 
-// Starts the HTTP server.
+// Start starts the HTTP server.
 func (s *Server) Start() error {
 	log.Info("Starting HTTP server", "listen", s.Addr)
-	s.registerHandlers()
 
 	if err := s.ListenAndServe(); err != nil {
 		log.Error("Error starting Web Server", "error", err)
@@ -34,24 +54,4 @@ func (s *Server) Start() error {
 	}
 
 	return nil
-}
-
-func (s *Server) registerHandlers() {
-	(&webhookHandler{}).registerHandler(s)
-	(&statusHandler{}).registerHandler()
-
-	// Register OAuth setup endpoints only when client credentials are present
-	// but no refresh token is configured yet (initial setup mode).
-	if s.Config.AuthMode == "oauth2-setup" {
-		handler := &oauthSetupHandler{
-			clientID:     s.Config.JiraClientID,
-			clientSecret: s.Config.JiraClientSecret,
-			callbackURL:  s.Config.OAuthCallbackURL,
-			persistence:  s.State.TokenPersistenceAdapter,
-		}
-		handler.registerHandler()
-		http.HandleFunc("/", handler.handleRootSetup)
-	} else {
-		http.HandleFunc("/", handleRootStatus)
-	}
 }
