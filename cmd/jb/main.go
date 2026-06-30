@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/charmbracelet/log"
@@ -26,9 +29,10 @@ func main() {
 	}
 
 	var jiraClient common.JiraClientInterface
+	var shutdownFn func()
 	switch cfg.AuthMode {
 	case "oauth2":
-		jiraClient = buildOAuth2Client(cfg)
+		jiraClient, shutdownFn = buildOAuth2Client(cfg)
 	case "oauth2-setup":
 		// No Jira client in setup mode — the bot only serves the OAuth setup endpoints
 		jiraClient = nil
@@ -43,6 +47,18 @@ func main() {
 		RepoConfigLoader: config.NewLoader(githubClient),
 	}
 
+	// Handle SIGTERM for graceful shutdown (spot instance termination).
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+	go func() {
+		sig := <-sigCh
+		log.Info("Received shutdown signal, persisting token state", "signal", sig)
+		if shutdownFn != nil {
+			shutdownFn()
+		}
+		os.Exit(0)
+	}()
+
 	s := http.NewServer(state)
 	if err := s.Start(); err != nil {
 		panic(err)
@@ -52,18 +68,19 @@ func main() {
 // buildOAuth2Client constructs the Jira client for the "oauth2" auth mode.
 // It attempts to set up Kubernetes-based token persistence and leader election.
 // On any failure, it gracefully degrades to the current standalone behavior.
-func buildOAuth2Client(cfg common.Config) common.JiraClientInterface {
+// Returns the client and a shutdown function that persists tokens on graceful termination.
+func buildOAuth2Client(cfg common.Config) (common.JiraClientInterface, func()) {
 	// If leader election is not enabled (missing pod name/namespace), use standalone mode.
 	if !cfg.LeaderEnabled {
 		log.Warn("Leader election disabled (POD_NAME or POD_NAMESPACE not set), using standalone token refresh")
-		return jira.NewOAuthClient(cfg.JiraCloudID, cfg.JiraClientID, cfg.JiraClientSecret, cfg.JiraRefreshToken)
+		return jira.NewOAuthClient(cfg.JiraCloudID, cfg.JiraClientID, cfg.JiraClientSecret, cfg.JiraRefreshToken), nil
 	}
 
 	// Attempt to build in-cluster Kubernetes client.
 	k8sClient, err := buildK8sClient()
 	if err != nil {
 		log.Warn("Failed to create Kubernetes client, falling back to standalone token refresh", "error", err)
-		return jira.NewOAuthClient(cfg.JiraCloudID, cfg.JiraClientID, cfg.JiraClientSecret, cfg.JiraRefreshToken)
+		return jira.NewOAuthClient(cfg.JiraCloudID, cfg.JiraClientID, cfg.JiraClientSecret, cfg.JiraRefreshToken), nil
 	}
 
 	// Create the token persistence adapter.
@@ -82,7 +99,7 @@ func buildOAuth2Client(cfg common.Config) common.JiraClientInterface {
 		} else {
 			log.Warn("Failed to read token secret, falling back to environment variable token", "error", err)
 		}
-		return jira.NewOAuthClient(cfg.JiraCloudID, cfg.JiraClientID, cfg.JiraClientSecret, cfg.JiraRefreshToken)
+		return jira.NewOAuthClient(cfg.JiraCloudID, cfg.JiraClientID, cfg.JiraClientSecret, cfg.JiraRefreshToken), nil
 	}
 
 	// Select the initial refresh token (Req 2.1, 2.2, 2.3).
@@ -98,6 +115,8 @@ func buildOAuth2Client(cfg common.Config) common.JiraClientInterface {
 	}
 
 	// Create leader and follower token sources.
+	// NewLeaderTokenSource installs a RefreshCallback on the TokenManager for
+	// persist-before-use semantics (prevents token loss on abrupt termination).
 	leaderSource := k8s.NewLeaderTokenSource(tm, adapter, logger)
 	followerSource := k8s.NewFollowerTokenSource(adapter, cfg.PollInterval, logger)
 
@@ -134,7 +153,7 @@ func buildOAuth2Client(cfg common.Config) common.JiraClientInterface {
 	if err != nil {
 		// Leader election setup failed — fall back to standalone mode (Req 9.4).
 		log.Warn("Failed to create leader elector, falling back to independent token refresh", "error", err)
-		return jira.NewOAuthClient(cfg.JiraCloudID, cfg.JiraClientID, cfg.JiraClientSecret, refreshToken)
+		return jira.NewOAuthClient(cfg.JiraCloudID, cfg.JiraClientID, cfg.JiraClientSecret, refreshToken), nil
 	}
 
 	// Start the follower polling loop in the background.
@@ -145,8 +164,28 @@ func buildOAuth2Client(cfg common.Config) common.JiraClientInterface {
 	// Start the leader election campaign in the background.
 	go leaderElector.Run(context.Background())
 
+	// Shutdown function: persist current token state on graceful termination.
+	shutdownFn := func() {
+		refreshTok, accessTok, expiresAt := tm.TokenState()
+		if refreshTok == "" {
+			return
+		}
+		data := k8s.TokenData{
+			RefreshToken: refreshTok,
+			AccessToken:  accessTok,
+			ExpiresAt:    expiresAt,
+		}
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if writeErr := adapter.Write(shutdownCtx, data); writeErr != nil {
+			log.Error("Failed to persist token on shutdown", "error", writeErr)
+		} else {
+			log.Info("Token state persisted on shutdown")
+		}
+	}
+
 	// Wire the switchable token source into the Jira client.
-	return jira.NewOAuthClientWithTokenSource(cfg.JiraCloudID, tokenSource)
+	return jira.NewOAuthClientWithTokenSource(cfg.JiraCloudID, tokenSource), shutdownFn
 }
 
 // buildK8sClient creates an in-cluster Kubernetes client.

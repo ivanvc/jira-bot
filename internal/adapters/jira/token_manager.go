@@ -24,6 +24,11 @@ const (
 // retryDelays defines the exponential backoff delays for token refresh retries.
 var retryDelays = []time.Duration{1 * time.Second, 2 * time.Second, 4 * time.Second}
 
+// RefreshCallback is called immediately after a successful token refresh with the
+// new token state. This allows the caller to persist the new tokens before they are
+// used, preventing token loss if the process is killed between refresh and persistence.
+type RefreshCallback func(refreshToken, accessToken string, expiresAt time.Time)
+
 // TokenManager handles OAuth 2.0 token lifecycle including refresh and caching.
 type TokenManager struct {
 	clientID     string
@@ -35,9 +40,10 @@ type TokenManager struct {
 	accessToken string
 	expiresAt   time.Time
 
-	httpClient *http.Client
-	sfGroup    singleflight.Group
-	logger     *log.Logger
+	httpClient      *http.Client
+	sfGroup         singleflight.Group
+	logger          *log.Logger
+	refreshCallback RefreshCallback
 }
 
 // TokenManagerOption configures a TokenManager.
@@ -61,6 +67,16 @@ func WithLogger(l *log.Logger) TokenManagerOption {
 func WithTokenURL(url string) TokenManagerOption {
 	return func(tm *TokenManager) {
 		tm.tokenURL = url
+	}
+}
+
+// WithRefreshCallback sets a callback that is invoked immediately after a successful
+// token refresh, before the token is returned to the caller. This enables persist-before-use
+// semantics — the new refresh token is saved to durable storage before it can be lost
+// to process termination.
+func WithRefreshCallback(cb RefreshCallback) TokenManagerOption {
+	return func(tm *TokenManager) {
+		tm.refreshCallback = cb
 	}
 }
 
@@ -91,6 +107,12 @@ func (tm *TokenManager) SetCachedToken(accessToken string, expiresAt time.Time) 
 	defer tm.mu.Unlock()
 	tm.accessToken = accessToken
 	tm.expiresAt = expiresAt
+}
+
+// SetRefreshCallback sets the callback invoked after each successful token refresh.
+// This must be called before any Token() calls to avoid races.
+func (tm *TokenManager) SetRefreshCallback(cb RefreshCallback) {
+	tm.refreshCallback = cb
 }
 
 // TokenState returns the current refresh token, access token, and expiry time.
@@ -241,9 +263,19 @@ func (tm *TokenManager) doRefreshRequest() (string, error, int, bool) {
 	if tokenResp.RefreshToken != "" {
 		tm.refreshToken = tokenResp.RefreshToken
 	}
+	currentRefresh := tm.refreshToken
+	currentAccess := tm.accessToken
+	currentExpiry := tm.expiresAt
 	tm.mu.Unlock()
 
-	tm.logger.Info("Token refreshed successfully", "expires_at", tm.expiresAt)
+	// Invoke the refresh callback BEFORE returning the token. This ensures the new
+	// refresh token is persisted to durable storage before it can be lost to process
+	// termination (persist-before-use pattern).
+	if tm.refreshCallback != nil {
+		tm.refreshCallback(currentRefresh, currentAccess, currentExpiry)
+	}
+
+	tm.logger.Info("Token refreshed successfully", "expires_at", currentExpiry)
 
 	return tokenResp.AccessToken, nil, resp.StatusCode, false
 }

@@ -27,12 +27,31 @@ type LeaderTokenSource struct {
 }
 
 // NewLeaderTokenSource wraps an existing TokenManager with persistence.
+// It installs a RefreshCallback on the TokenManager that persists new tokens
+// immediately after a successful refresh (persist-before-use), preventing token
+// loss on abrupt process termination (e.g., spot instance eviction).
 func NewLeaderTokenSource(tm *jira.TokenManager, adapter *TokenPersistenceAdapter, logger *log.Logger) *LeaderTokenSource {
-	return &LeaderTokenSource{
+	l := &LeaderTokenSource{
 		tokenManager: tm,
 		adapter:      adapter,
 		logger:       logger,
 	}
+
+	// Install the persist-before-use callback. This ensures the new refresh token
+	// is written to the Bot_Secret before the access token is returned and used,
+	// closing the window where a SIGKILL could lose the rotated refresh token.
+	tm.SetRefreshCallback(func(refreshToken, accessToken string, expiresAt time.Time) {
+		data := TokenData{
+			RefreshToken: refreshToken,
+			AccessToken:  accessToken,
+			ExpiresAt:    expiresAt,
+		}
+		if writeErr := adapter.Write(context.Background(), data); writeErr != nil {
+			logger.Error("Failed to persist token after refresh (callback)", "error", writeErr)
+		}
+	})
+
+	return l
 }
 
 // Start begins the proactive refresh loop. It checks every refreshCheckInterval whether
@@ -73,26 +92,13 @@ func (l *LeaderTokenSource) proactiveRefresh() {
 	}
 }
 
-// Token returns a valid access token, refreshing if needed, and persists new tokens.
-// On write failure, logs the error but still returns the token (graceful degradation per Req 3.2).
+// Token returns a valid access token, refreshing if needed.
+// Persistence is handled by the RefreshCallback installed on the TokenManager,
+// which writes to the Bot_Secret immediately after each successful refresh.
 func (l *LeaderTokenSource) Token() (string, error) {
 	token, err := l.tokenManager.Token()
 	if err != nil {
 		return "", err
 	}
-
-	// Persist the current token state to the Bot_Secret.
-	refreshToken, accessToken, expiresAt := l.tokenManager.TokenState()
-	data := TokenData{
-		RefreshToken: refreshToken,
-		AccessToken:  accessToken,
-		ExpiresAt:    expiresAt,
-	}
-
-	if writeErr := l.adapter.Write(context.Background(), data); writeErr != nil {
-		// Graceful degradation: log the error but return the token anyway (Req 3.2).
-		l.logger.Error("Failed to persist token after refresh", "error", writeErr)
-	}
-
 	return token, nil
 }
