@@ -44,7 +44,7 @@ The bot uses OAuth 2.0 (3LO) to authenticate with Jira Cloud. You need to create
 
 1. Go to **Authorization** in the left sidebar
 2. Click **Add** next to **OAuth 2.0 (3LO)**
-3. Set the **Callback URL** to your bot's `/jira/oauth/callback` endpoint (e.g. `http://localhost:8080/jira/oauth/callback` for local setup, or `https://<your-bot-host>/jira/oauth/callback` for production)
+3. Set the **Callback URL** to your bot's `/oauth/jira/callback` endpoint (e.g. `http://localhost:8080/oauth/jira/callback` for local setup, or `https://<your-bot-host>/oauth/jira/callback` for production)
 4. Click **Save**
 
 #### 3.4 Get Client Credentials
@@ -52,14 +52,14 @@ The bot uses OAuth 2.0 (3LO) to authenticate with Jira Cloud. You need to create
 1. Go to **Settings** in the left sidebar
 2. Note the **Client ID** and **Secret** — these are your `JIRA_BOT_JIRA_CLIENT_ID` and `JIRA_BOT_JIRA_CLIENT_SECRET`
 
-#### 3.5 Obtain a Refresh Token
+#### 3.5 Authorize with Atlassian (Automated Setup)
 
-The bot has a built-in setup flow. Start it with only the client credentials and callback URL:
+The bot has a built-in setup flow that automatically persists OAuth tokens and your Cloud ID. Deploy the bot with only client credentials:
 
 ```bash
 export JIRA_BOT_JIRA_CLIENT_ID=your-client-id
 export JIRA_BOT_JIRA_CLIENT_SECRET=your-client-secret
-export JIRA_BOT_OAUTH_CALLBACK_URL=https://<your-bot-host>/jira/oauth/callback
+export JIRA_BOT_OAUTH_CALLBACK_URL=https://<your-bot-host>/oauth/jira/callback
 export JIRA_BOT_GITHUB_APP_ID=123456
 export JIRA_BOT_GITHUB_PRIVATE_KEY="your-key"
 export JIRA_BOT_GITHUB_WEBHOOK_SECRET="your-secret"
@@ -67,27 +67,26 @@ export JIRA_BOT_JIRA_DEFAULT_PROJECT=ENG
 export JIRA_BOT_JIRA_DEFAULT_ISSUE_TYPE=Task
 ```
 
-Then run the bot and open `http://localhost:8080/jira/oauth/authorize` (or `https://<your-bot-host>/jira/oauth/authorize` if deployed) in your browser. This redirects you to Atlassian for authorization. After you approve, you're sent back to `/jira/oauth/callback` where the bot exchanges the code and displays your refresh token.
-
 The `JIRA_BOT_OAUTH_CALLBACK_URL` must match exactly what you registered in the Atlassian Developer Console (step 3.3).
 
-Copy the refresh token and set it as `JIRA_BOT_JIRA_REFRESH_TOKEN`. Once configured, restart the bot with all four OAuth variables and the setup endpoints disappear.
+Without a refresh token, the bot starts in **setup mode**. Open the root URL (`http://localhost:8080/` or `https://<your-bot-host>/`) in your browser:
 
-> The refresh token remains valid as long as it's used within 90 days. The bot refreshes access tokens automatically at runtime. When deployed to Kubernetes with token persistence enabled (default), the bot stores each rotated refresh token so it survives restarts indefinitely.
+1. Click **"Authorize with Atlassian"**
+2. Grant consent on the Atlassian authorization screen
+3. The bot exchanges the code for tokens, fetches your Cloud ID from the accessible-resources API, and persists everything to the Kubernetes Secret automatically
+4. If your Atlassian account has access to multiple sites, you'll be shown a selection page — pick the site you want the bot to use
 
-#### 3.6 Get Your Cloud ID
+Once you see the success page, **restart the pod**. On next startup the bot reads the persisted tokens from the Secret and enters normal `oauth2` mode.
 
-The Cloud ID identifies your Jira Cloud site. Retrieve it with:
+> **Important:** OAuth tokens are stored exclusively in the Kubernetes Bot_Secret. There is no environment variable fallback. If the bot cannot persist tokens (missing RBAC, Kubernetes API unreachable), the setup handler shows a hard error page with instructions to fix RBAC permissions and re-run the OAuth flow.
 
-```bash
-curl -s https://YOUR_SITE.atlassian.net/_edge/tenant_info | jq -r '.cloudId'
-```
-
-Or visit `https://YOUR_SITE.atlassian.net/_edge/tenant_info` in your browser and note the `cloudId` value. This is your `JIRA_BOT_JIRA_CLOUD_ID`.
+> The refresh token remains valid as long as it's used within 90 days. The bot refreshes access tokens automatically at runtime and persists each rotation to the Kubernetes Secret.
 
 ### 4. Configure Environment
 
 #### OAuth 2.0 (recommended)
+
+If you used the automated setup flow (section 3.5), the bot reads tokens and Cloud ID from the Kubernetes Bot_Secret — you only need client credentials:
 
 ```bash
 JIRA_BOT_GITHUB_APP_ID=123456
@@ -95,11 +94,11 @@ JIRA_BOT_GITHUB_PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\n..."
 JIRA_BOT_GITHUB_WEBHOOK_SECRET=$(openssl rand -hex 20)
 JIRA_BOT_JIRA_CLIENT_ID=your-client-id
 JIRA_BOT_JIRA_CLIENT_SECRET=your-client-secret
-JIRA_BOT_JIRA_REFRESH_TOKEN=your-refresh-token
-JIRA_BOT_JIRA_CLOUD_ID=your-cloud-id
 JIRA_BOT_JIRA_DEFAULT_PROJECT=ENG
 JIRA_BOT_JIRA_DEFAULT_ISSUE_TYPE=Task
 ```
+
+The bot requires Kubernetes access to persist and retrieve OAuth tokens. There is no env var fallback for refresh tokens or Cloud ID.
 
 #### Basic Auth (legacy, PAT)
 
@@ -118,18 +117,20 @@ JIRA_BOT_JIRA_DEFAULT_ISSUE_TYPE=Task
 
 ### 5. Deploy with Helm
 
+Deploy with client credentials. The bot starts in setup mode until you complete the OAuth flow:
+
 ```bash
 helm install jira-bot charts/jira-bot \
   --set secrets.github.webhookSecret="your-webhook-secret" \
   --set secrets.github.privateKeyBase64="base64-encoded-private-key" \
   --set secrets.jira.clientID="your-client-id" \
   --set secrets.jira.clientSecret="your-client-secret" \
-  --set secrets.jira.refreshToken="your-refresh-token" \
-  --set config.jira.cloudID="your-cloud-id" \
   --set config.githubAppID="123456" \
   --set config.jira.defaultProject="ENG" \
   --set config.jira.defaultIssueType="Task"
 ```
+
+The bot starts in setup mode. Visit the root URL, authorize with Atlassian, and restart the pod (see section 3.5). After authorization, tokens are persisted to the Bot_Secret automatically.
 
 Token persistence and leader election are enabled by default. To disable:
 
@@ -142,14 +143,18 @@ helm install jira-bot charts/jira-bot \
 
 ## Authentication Modes
 
-The bot supports two authentication modes:
+The bot supports three modes:
 
-| Mode | Variables Required | Notes |
-|------|-------------------|-------|
-| **OAuth 2.0** (recommended) | `JIRA_BOT_JIRA_CLIENT_ID`, `JIRA_BOT_JIRA_CLIENT_SECRET`, `JIRA_BOT_JIRA_REFRESH_TOKEN`, `JIRA_BOT_JIRA_CLOUD_ID` | Tokens refresh automatically. No manual rotation needed. |
-| **Basic Auth** (legacy) | `JIRA_BOT_JIRA_BASE_URL`, `JIRA_BOT_JIRA_USERNAME`, `JIRA_BOT_JIRA_TOKEN` | PAT expires every 90 days. Requires manual rotation. |
+| Mode | Variables Required | Root URL (`/`) | Notes |
+|------|-------------------|----------------|-------|
+| **OAuth 2.0 Setup** | `JIRA_BOT_JIRA_CLIENT_ID`, `JIRA_BOT_JIRA_CLIENT_SECRET` (Bot_Secret has no refresh token) | Authorization landing page | Temporary mode for initial setup. Transitions to OAuth 2.0 after authorization + pod restart. |
+| **OAuth 2.0** (recommended) | `JIRA_BOT_JIRA_CLIENT_ID`, `JIRA_BOT_JIRA_CLIENT_SECRET` + tokens in Bot_Secret | Status page ("configured and running") | Tokens refresh automatically. No manual rotation needed. |
+| **Basic Auth** (legacy) | `JIRA_BOT_JIRA_BASE_URL`, `JIRA_BOT_JIRA_USERNAME`, `JIRA_BOT_JIRA_TOKEN` | Status page ("configured and running") | PAT expires every 90 days. Requires manual rotation. |
 
-The bot detects the mode at startup. If all four OAuth variables are set, it uses OAuth 2.0. Otherwise it falls back to basic auth.
+The bot detects the mode at startup:
+1. If client credentials are set and the Bot_Secret contains a valid refresh token + Cloud ID → **OAuth 2.0**
+2. If client credentials are set but the Bot_Secret has no refresh token → **OAuth 2.0 Setup**
+3. If basic auth variables are set → **Basic Auth**
 
 ## Token Persistence (Multi-Replica)
 
@@ -160,13 +165,13 @@ When running with multiple replicas in Kubernetes, the bot automatically persist
 - **Leader election**: One pod acquires a Kubernetes Lease and becomes the sole token refresher. This prevents multiple pods from racing against Atlassian's rotating refresh token.
 - **Token persistence**: After each token refresh, the leader writes the new refresh token, access token, and expiry to a separate Kubernetes secret (not the Helm-managed one).
 - **Follower polling**: Non-leader pods poll the bot-managed secret (default every 30s) and use the access token directly without calling Atlassian.
-- **Startup recovery**: On restart, the bot reads the latest persisted refresh token from the secret, so it always has the most recent rotation — even if 90+ days have passed since the original env var token was issued.
+- **Startup recovery**: On restart, the bot reads the latest persisted refresh token from the secret, so it always has the most recent rotation — even if 90+ days have passed since the initial OAuth authorization.
 
-### Graceful Degradation
+### Kubernetes Requirement
 
-Token persistence activates automatically when the bot detects it's running in Kubernetes (via `POD_NAME` and `POD_NAMESPACE` from the downward API). When running outside Kubernetes (e.g., local development), the bot falls back to its standard behavior — keeping tokens in memory and using the env var refresh token.
+Token persistence requires Kubernetes access. The bot detects it's running in Kubernetes via `POD_NAME` and `POD_NAMESPACE` from the downward API.
 
-If RBAC permissions are missing or the Kubernetes API is unreachable, the bot logs a warning and continues operating without persistence.
+If RBAC permissions are missing or the Kubernetes API is unreachable during the setup flow, the bot renders a hard error page with instructions to fix RBAC permissions. The operator must resolve the issue and re-run the OAuth flow — tokens are never displayed in the browser.
 
 ### Configuration
 

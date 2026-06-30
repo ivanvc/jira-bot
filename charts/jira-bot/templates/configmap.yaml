@@ -8,9 +8,6 @@ data:
   JIRA_BOT_JIRA_DEFAULT_PROJECT: {{ .Values.config.jira.defaultProject }}
   JIRA_BOT_JIRA_DEFAULT_ISSUE_TYPE: {{ .Values.config.jira.defaultIssueType }}
   JIRA_BOT_GITHUB_APP_ID: {{ .Values.config.githubAppID | quote }}
-  {{- if .Values.config.jira.cloudID }}
-  JIRA_BOT_JIRA_CLOUD_ID: {{ .Values.config.jira.cloudID }}
-  {{- end }}
   {{- if .Values.config.oauthCallbackURL }}
   JIRA_BOT_OAUTH_CALLBACK_URL: {{ .Values.config.oauthCallbackURL }}
   {{- end }}

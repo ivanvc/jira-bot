@@ -17,6 +17,7 @@ type TokenData struct {
 	RefreshToken string
 	AccessToken  string
 	ExpiresAt    time.Time
+	CloudID      string
 }
 
 // Secret data key constants
@@ -24,15 +25,20 @@ const (
 	KeyRefreshToken = "refresh-token"
 	KeyAccessToken  = "access-token"
 	KeyExpiresAt    = "expires-at"
+	KeyCloudID      = "cloud-id"
 )
 
 // ToSecretData serializes TokenData into the secret's Data map.
 func (d TokenData) ToSecretData() map[string][]byte {
-	return map[string][]byte{
+	m := map[string][]byte{
 		KeyRefreshToken: []byte(d.RefreshToken),
 		KeyAccessToken:  []byte(d.AccessToken),
 		KeyExpiresAt:    []byte(d.ExpiresAt.Format(time.RFC3339)),
 	}
+	if d.CloudID != "" {
+		m[KeyCloudID] = []byte(d.CloudID)
+	}
+	return m
 }
 
 // TokenDataFromSecret deserializes TokenData from a secret's Data map.
@@ -41,10 +47,17 @@ func TokenDataFromSecret(data map[string][]byte) (TokenData, error) {
 	if err != nil {
 		return TokenData{}, fmt.Errorf("invalid expires-at: %w", err)
 	}
+
+	cloudID := ""
+	if v, ok := data[KeyCloudID]; ok && len(v) > 0 {
+		cloudID = string(v)
+	}
+
 	return TokenData{
 		RefreshToken: string(data[KeyRefreshToken]),
 		AccessToken:  string(data[KeyAccessToken]),
 		ExpiresAt:    expiresAt,
+		CloudID:      cloudID,
 	}, nil
 }
 

@@ -12,8 +12,6 @@ config:
   # Optional: OAuth callback URL (only needed during initial setup)
   oauthCallbackURL: ""
   jira:
-    # OAuth 2.0: Jira Cloud ID (required for OAuth mode)
-    cloudID: ""
     # Legacy: Jira Base URL (required for basic auth mode)
     baseURL: ""
     # Legacy: Jira username (required for basic auth mode)
@@ -36,7 +34,6 @@ secrets:
     # OAuth 2.0 credentials (required for OAuth mode)
     clientID: ""
     clientSecret: ""
-    refreshToken: ""
     # Legacy PAT credential (required for basic auth mode)
     token: ""
 

@@ -47,6 +47,17 @@ func main() {
 		RepoConfigLoader: config.NewLoader(githubClient),
 	}
 
+	// In setup mode, construct K8s client and TokenPersistenceAdapter for auto-persisting tokens.
+	if cfg.AuthMode == "oauth2-setup" && cfg.PodNamespace != "" && cfg.TokenSecretName != "" {
+		k8sClient, err := buildK8sClient()
+		if err != nil {
+			log.Warn("Failed to create Kubernetes client for setup mode, token auto-persistence will be unavailable", "error", err)
+		} else {
+			logger := log.Default()
+			state.TokenPersistenceAdapter = k8s.NewTokenPersistenceAdapter(k8sClient, cfg.PodNamespace, cfg.TokenSecretName, logger)
+		}
+	}
+
 	// Handle SIGTERM for graceful shutdown (spot instance termination).
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
@@ -73,43 +84,36 @@ func buildOAuth2Client(cfg common.Config) (common.JiraClientInterface, func()) {
 	// If leader election is not enabled (missing pod name/namespace), use standalone mode.
 	if !cfg.LeaderEnabled {
 		log.Warn("Leader election disabled (POD_NAME or POD_NAMESPACE not set), using standalone token refresh")
-		return jira.NewOAuthClient(cfg.JiraCloudID, cfg.JiraClientID, cfg.JiraClientSecret, cfg.JiraRefreshToken), nil
+		return jira.NewOAuthClient(cfg.TokenData.CloudID, cfg.JiraClientID, cfg.JiraClientSecret, cfg.TokenData.RefreshToken), nil
 	}
 
 	// Attempt to build in-cluster Kubernetes client.
 	k8sClient, err := buildK8sClient()
 	if err != nil {
 		log.Warn("Failed to create Kubernetes client, falling back to standalone token refresh", "error", err)
-		return jira.NewOAuthClient(cfg.JiraCloudID, cfg.JiraClientID, cfg.JiraClientSecret, cfg.JiraRefreshToken), nil
+		return jira.NewOAuthClient(cfg.TokenData.CloudID, cfg.JiraClientID, cfg.JiraClientSecret, cfg.TokenData.RefreshToken), nil
 	}
 
 	// Create the token persistence adapter.
 	logger := log.Default()
 	adapter := k8s.NewTokenPersistenceAdapter(k8sClient, cfg.PodNamespace, cfg.TokenSecretName, logger)
 
-	// Read initial tokens from the Bot_Secret.
+	// Create the TokenManager with the refresh token from Bot_Secret.
+	tm := jira.NewTokenManager(cfg.JiraClientID, cfg.JiraClientSecret, cfg.TokenData.RefreshToken)
+
+	// Attempt to read persisted access token for pre-seeding only.
 	ctx := context.Background()
 	initialTokens, err := adapter.Read(ctx)
 	if err != nil {
-		// Detect RBAC errors (403) and log a clear message (Req 9.3).
+		// Log but don't fail — we already have the refresh token from cfg.TokenData.
 		if k8serrors.IsForbidden(err) {
 			log.Error("RBAC permissions missing: the bot's ServiceAccount does not have access to read secrets. "+
-				"Ensure a Role with get/create/update permissions on secrets is bound to the ServiceAccount. "+
-				"Falling back to environment variable token.", "error", err)
+				"Ensure a Role with get/create/update permissions on secrets is bound to the ServiceAccount.", "error", err)
 		} else {
-			log.Warn("Failed to read token secret, falling back to environment variable token", "error", err)
+			log.Warn("Failed to read token secret for access token pre-seeding, skipping", "error", err)
 		}
-		return jira.NewOAuthClient(cfg.JiraCloudID, cfg.JiraClientID, cfg.JiraClientSecret, cfg.JiraRefreshToken), nil
-	}
-
-	// Select the initial refresh token (Req 2.1, 2.2, 2.3).
-	refreshToken := k8s.PickRefreshToken(initialTokens, cfg.JiraRefreshToken, logger)
-
-	// Create the TokenManager with the selected refresh token.
-	tm := jira.NewTokenManager(cfg.JiraClientID, cfg.JiraClientSecret, refreshToken)
-
-	// Pre-seed the access token if the persisted one is still valid (Req 2.4).
-	if initialTokens.AccessToken != "" && initialTokens.ExpiresAt.After(time.Now()) {
+	} else if initialTokens.AccessToken != "" && initialTokens.ExpiresAt.After(time.Now()) {
+		// Pre-seed the access token if the persisted one is still valid.
 		tm.SetCachedToken(initialTokens.AccessToken, initialTokens.ExpiresAt)
 		log.Info("Pre-seeded access token from Bot_Secret", "expires_at", initialTokens.ExpiresAt)
 	}
@@ -151,9 +155,9 @@ func buildOAuth2Client(cfg common.Config) (common.JiraClientInterface, func()) {
 		},
 	})
 	if err != nil {
-		// Leader election setup failed — fall back to standalone mode (Req 9.4).
+		// Leader election setup failed — fall back to standalone mode.
 		log.Warn("Failed to create leader elector, falling back to independent token refresh", "error", err)
-		return jira.NewOAuthClient(cfg.JiraCloudID, cfg.JiraClientID, cfg.JiraClientSecret, refreshToken), nil
+		return jira.NewOAuthClient(cfg.TokenData.CloudID, cfg.JiraClientID, cfg.JiraClientSecret, cfg.TokenData.RefreshToken), nil
 	}
 
 	// Start the follower polling loop in the background.
@@ -185,7 +189,7 @@ func buildOAuth2Client(cfg common.Config) (common.JiraClientInterface, func()) {
 	}
 
 	// Wire the switchable token source into the Jira client.
-	return jira.NewOAuthClientWithTokenSource(cfg.JiraCloudID, tokenSource), shutdownFn
+	return jira.NewOAuthClientWithTokenSource(cfg.TokenData.CloudID, tokenSource), shutdownFn
 }
 
 // buildK8sClient creates an in-cluster Kubernetes client.

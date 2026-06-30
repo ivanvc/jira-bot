@@ -1,15 +1,92 @@
 package common
 
 import (
+	"context"
+	"errors"
 	"os"
 	"os/exec"
-	"strings"
 	"testing"
-	"testing/quick"
 	"time"
 
+	"github.com/ivanvc/jira-bot/internal/adapters/k8s"
 	"github.com/stretchr/testify/assert"
 )
+
+// mockBotSecretReader is a test helper that implements BotSecretReader.
+type mockBotSecretReader struct {
+	data k8s.TokenData
+	err  error
+}
+
+func (m *mockBotSecretReader) Read(_ context.Context) (k8s.TokenData, error) {
+	return m.data, m.err
+}
+
+// --- determineAuthMode tests ---
+
+func TestDetermineAuthMode_ClientCredentialsAbsent(t *testing.T) {
+	tests := []struct {
+		name         string
+		clientID     string
+		clientSecret string
+	}{
+		{"both empty", "", ""},
+		{"clientID empty", "", "secret"},
+		{"clientSecret empty", "id", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mode, data, err := determineAuthMode(tt.clientID, tt.clientSecret, nil)
+			assert.Equal(t, "", mode)
+			assert.Equal(t, k8s.TokenData{}, data)
+			assert.NoError(t, err)
+		})
+	}
+}
+
+func TestDetermineAuthMode_NilReader(t *testing.T) {
+	mode, data, err := determineAuthMode("id", "secret", nil)
+	assert.Equal(t, "oauth2-setup", mode)
+	assert.Equal(t, k8s.TokenData{}, data)
+	assert.NoError(t, err)
+}
+
+func TestDetermineAuthMode_ReadError(t *testing.T) {
+	reader := &mockBotSecretReader{err: errors.New("k8s unavailable")}
+	mode, data, err := determineAuthMode("id", "secret", reader)
+	assert.Equal(t, "oauth2-setup", mode)
+	assert.Equal(t, k8s.TokenData{}, data)
+	assert.NoError(t, err)
+}
+
+func TestDetermineAuthMode_ValidTokenData(t *testing.T) {
+	expected := k8s.TokenData{
+		RefreshToken: "refresh-123",
+		AccessToken:  "access-456",
+		CloudID:      "cloud-789",
+	}
+	reader := &mockBotSecretReader{data: expected}
+	mode, data, err := determineAuthMode("id", "secret", reader)
+	assert.Equal(t, "oauth2", mode)
+	assert.Equal(t, expected, data)
+	assert.NoError(t, err)
+}
+
+func TestDetermineAuthMode_MissingRefreshToken(t *testing.T) {
+	reader := &mockBotSecretReader{data: k8s.TokenData{CloudID: "cloud-789"}}
+	mode, data, err := determineAuthMode("id", "secret", reader)
+	assert.Equal(t, "oauth2-setup", mode)
+	assert.Equal(t, k8s.TokenData{}, data)
+	assert.NoError(t, err)
+}
+
+func TestDetermineAuthMode_MissingCloudID(t *testing.T) {
+	reader := &mockBotSecretReader{data: k8s.TokenData{RefreshToken: "refresh-123"}}
+	mode, data, err := determineAuthMode("id", "secret", reader)
+	assert.Equal(t, "oauth2-setup", mode)
+	assert.Equal(t, k8s.TokenData{}, data)
+	assert.NoError(t, err)
+}
 
 func TestLoadConfig_AllRequiredEnvVarsSet(t *testing.T) {
 	// Set all required environment variables
@@ -54,7 +131,7 @@ func TestLoadConfig_OptionalEnvVarUsesDefault(t *testing.T) {
 
 // --- OAuth 2.0 mode tests ---
 
-func TestLoadConfig_OAuthMode_AllOAuthVarsSet(t *testing.T) {
+func TestLoadConfig_OAuthMode_WithMockReader(t *testing.T) {
 	// Set common required vars
 	t.Setenv("JIRA_BOT_GITHUB_APP_ID", "12345")
 	t.Setenv("JIRA_BOT_GITHUB_PRIVATE_KEY", "test-private-key")
@@ -62,22 +139,36 @@ func TestLoadConfig_OAuthMode_AllOAuthVarsSet(t *testing.T) {
 	t.Setenv("JIRA_BOT_JIRA_DEFAULT_PROJECT", "PROJ")
 	t.Setenv("JIRA_BOT_JIRA_DEFAULT_ISSUE_TYPE", "Task")
 
-	// Set all 4 OAuth vars
+	// Set client credentials
 	t.Setenv("JIRA_BOT_JIRA_CLIENT_ID", "my-client-id")
 	t.Setenv("JIRA_BOT_JIRA_CLIENT_SECRET", "my-client-secret")
-	t.Setenv("JIRA_BOT_JIRA_REFRESH_TOKEN", "my-refresh-token")
-	t.Setenv("JIRA_BOT_JIRA_CLOUD_ID", "my-cloud-id")
+
+	// Set K8s env vars for reader creation
+	t.Setenv("POD_NAMESPACE", "default")
+	t.Setenv("JIRA_BOT_TOKEN_SECRET_NAME", "bot-secret")
+
+	// Set up mock reader factory that returns valid token data
+	originalFactory := NewBotSecretReader
+	defer func() { NewBotSecretReader = originalFactory }()
+	NewBotSecretReader = func(namespace, secretName string) (BotSecretReader, error) {
+		return &mockBotSecretReader{
+			data: k8s.TokenData{
+				RefreshToken: "my-refresh-token",
+				CloudID:      "my-cloud-id",
+			},
+		}, nil
+	}
 
 	cfg := LoadConfig()
 
 	assert.Equal(t, "oauth2", cfg.AuthMode)
 	assert.Equal(t, "my-client-id", cfg.JiraClientID)
 	assert.Equal(t, "my-client-secret", cfg.JiraClientSecret)
-	assert.Equal(t, "my-refresh-token", cfg.JiraRefreshToken)
-	assert.Equal(t, "my-cloud-id", cfg.JiraCloudID)
+	assert.Equal(t, "my-refresh-token", cfg.TokenData.RefreshToken)
+	assert.Equal(t, "my-cloud-id", cfg.TokenData.CloudID)
 }
 
-func TestLoadConfig_OAuthMode_LegacyVarsNotRequired(t *testing.T) {
+func TestLoadConfig_OAuthSetupMode_NoReader(t *testing.T) {
 	// Set common required vars
 	t.Setenv("JIRA_BOT_GITHUB_APP_ID", "12345")
 	t.Setenv("JIRA_BOT_GITHUB_PRIVATE_KEY", "test-private-key")
@@ -85,22 +176,22 @@ func TestLoadConfig_OAuthMode_LegacyVarsNotRequired(t *testing.T) {
 	t.Setenv("JIRA_BOT_JIRA_DEFAULT_PROJECT", "PROJ")
 	t.Setenv("JIRA_BOT_JIRA_DEFAULT_ISSUE_TYPE", "Task")
 
-	// Set all 4 OAuth vars — explicitly unset legacy vars
-	t.Setenv("JIRA_BOT_JIRA_CLIENT_ID", "client-id")
-	t.Setenv("JIRA_BOT_JIRA_CLIENT_SECRET", "client-secret")
-	t.Setenv("JIRA_BOT_JIRA_REFRESH_TOKEN", "refresh-token")
-	t.Setenv("JIRA_BOT_JIRA_CLOUD_ID", "cloud-id")
-	t.Setenv("JIRA_BOT_JIRA_USERNAME", "")
-	t.Setenv("JIRA_BOT_JIRA_TOKEN", "")
-	t.Setenv("JIRA_BOT_JIRA_BASE_URL", "")
+	// Set only CLIENT_ID and CLIENT_SECRET (no K8s reader available)
+	t.Setenv("JIRA_BOT_JIRA_CLIENT_ID", "my-client-id")
+	t.Setenv("JIRA_BOT_JIRA_CLIENT_SECRET", "my-client-secret")
+	t.Setenv("JIRA_BOT_OAUTH_CALLBACK_URL", "https://bot.example.com/jira/oauth/callback")
+
+	// Ensure no reader factory is set
+	originalFactory := NewBotSecretReader
+	defer func() { NewBotSecretReader = originalFactory }()
+	NewBotSecretReader = nil
 
 	cfg := LoadConfig()
 
-	assert.Equal(t, "oauth2", cfg.AuthMode)
-	// Legacy vars should not be required and should be empty when not provided
-	assert.Equal(t, "", cfg.JiraUsername)
-	assert.Equal(t, "", cfg.JiraToken)
-	assert.Equal(t, "", cfg.JiraBaseURL)
+	assert.Equal(t, "oauth2-setup", cfg.AuthMode)
+	assert.Equal(t, "my-client-id", cfg.JiraClientID)
+	assert.Equal(t, "my-client-secret", cfg.JiraClientSecret)
+	assert.Equal(t, "https://bot.example.com/jira/oauth/callback", cfg.OAuthCallbackURL)
 }
 
 func TestLoadConfig_OAuthMode_BothOAuthAndLegacySet_OAuthWins(t *testing.T) {
@@ -111,25 +202,38 @@ func TestLoadConfig_OAuthMode_BothOAuthAndLegacySet_OAuthWins(t *testing.T) {
 	t.Setenv("JIRA_BOT_JIRA_DEFAULT_PROJECT", "PROJ")
 	t.Setenv("JIRA_BOT_JIRA_DEFAULT_ISSUE_TYPE", "Task")
 
-	// Set all 4 OAuth vars
+	// Set client credentials
 	t.Setenv("JIRA_BOT_JIRA_CLIENT_ID", "client-id")
 	t.Setenv("JIRA_BOT_JIRA_CLIENT_SECRET", "client-secret")
-	t.Setenv("JIRA_BOT_JIRA_REFRESH_TOKEN", "refresh-token")
-	t.Setenv("JIRA_BOT_JIRA_CLOUD_ID", "cloud-id")
 
-	// Also set legacy vars
+	// Also set legacy vars (should not matter — OAuth path is taken)
 	t.Setenv("JIRA_BOT_JIRA_BASE_URL", "https://jira.example.com")
 	t.Setenv("JIRA_BOT_JIRA_USERNAME", "legacyuser")
 	t.Setenv("JIRA_BOT_JIRA_TOKEN", "legacy-token")
 
+	// Set K8s env vars and mock reader
+	t.Setenv("POD_NAMESPACE", "default")
+	t.Setenv("JIRA_BOT_TOKEN_SECRET_NAME", "bot-secret")
+
+	originalFactory := NewBotSecretReader
+	defer func() { NewBotSecretReader = originalFactory }()
+	NewBotSecretReader = func(namespace, secretName string) (BotSecretReader, error) {
+		return &mockBotSecretReader{
+			data: k8s.TokenData{
+				RefreshToken: "refresh-token",
+				CloudID:      "cloud-id",
+			},
+		}, nil
+	}
+
 	cfg := LoadConfig()
 
-	// OAuth should win
+	// OAuth should win when client credentials are present
 	assert.Equal(t, "oauth2", cfg.AuthMode)
 	assert.Equal(t, "client-id", cfg.JiraClientID)
 	assert.Equal(t, "client-secret", cfg.JiraClientSecret)
-	assert.Equal(t, "refresh-token", cfg.JiraRefreshToken)
-	assert.Equal(t, "cloud-id", cfg.JiraCloudID)
+	assert.Equal(t, "refresh-token", cfg.TokenData.RefreshToken)
+	assert.Equal(t, "cloud-id", cfg.TokenData.CloudID)
 }
 
 func TestLoadConfig_BasicMode_AuthModeIsBasic(t *testing.T) {
@@ -151,59 +255,36 @@ func TestLoadConfig_BasicMode_AuthModeIsBasic(t *testing.T) {
 	assert.Equal(t, "test-token", cfg.JiraToken)
 }
 
-func TestLoadConfig_OAuthSetupMode(t *testing.T) {
-	// Set common required vars
-	t.Setenv("JIRA_BOT_GITHUB_APP_ID", "12345")
-	t.Setenv("JIRA_BOT_GITHUB_PRIVATE_KEY", "test-private-key")
-	t.Setenv("JIRA_BOT_GITHUB_WEBHOOK_SECRET", "webhook-secret")
-	t.Setenv("JIRA_BOT_JIRA_DEFAULT_PROJECT", "PROJ")
-	t.Setenv("JIRA_BOT_JIRA_DEFAULT_ISSUE_TYPE", "Task")
 
-	// Set only CLIENT_ID and CLIENT_SECRET (setup mode)
-	t.Setenv("JIRA_BOT_JIRA_CLIENT_ID", "my-client-id")
-	t.Setenv("JIRA_BOT_JIRA_CLIENT_SECRET", "my-client-secret")
-	t.Setenv("JIRA_BOT_OAUTH_CALLBACK_URL", "https://bot.example.com/jira/oauth/callback")
 
-	cfg := LoadConfig()
-
-	assert.Equal(t, "oauth2-setup", cfg.AuthMode)
-	assert.Equal(t, "my-client-id", cfg.JiraClientID)
-	assert.Equal(t, "my-client-secret", cfg.JiraClientSecret)
-	assert.Equal(t, "https://bot.example.com/jira/oauth/callback", cfg.OAuthCallbackURL)
-	assert.Equal(t, "", cfg.JiraRefreshToken)
-	assert.Equal(t, "", cfg.JiraCloudID)
-}
-
-// TestLoadConfig_PartialOAuthVars_Fatal verifies that LoadConfig terminates
-// when only some OAuth vars are set in a non-setup pattern (Requirement 1.5).
-func TestLoadConfig_PartialOAuthVars_Fatal(t *testing.T) {
+// TestLoadConfig_NoAuthConfig_Fatal verifies that LoadConfig terminates
+// when no valid auth configuration is found (Requirement 1.5).
+func TestLoadConfig_NoAuthConfig_Fatal(t *testing.T) {
 	if os.Getenv("TEST_SUBPROCESS_FATAL") == "1" {
-		// Set only some OAuth vars (partial config that isn't setup mode)
+		// No client credentials and no basic auth vars set
 		os.Setenv("JIRA_BOT_GITHUB_APP_ID", "123")
 		os.Setenv("JIRA_BOT_GITHUB_PRIVATE_KEY", "key")
 		os.Setenv("JIRA_BOT_GITHUB_WEBHOOK_SECRET", "secret")
 		os.Setenv("JIRA_BOT_JIRA_DEFAULT_PROJECT", "PROJ")
 		os.Setenv("JIRA_BOT_JIRA_DEFAULT_ISSUE_TYPE", "Task")
-		// Set CLIENT_ID and REFRESH_TOKEN but not CLIENT_SECRET or CLOUD_ID
-		os.Setenv("JIRA_BOT_JIRA_CLIENT_ID", "my-client-id")
-		os.Setenv("JIRA_BOT_JIRA_REFRESH_TOKEN", "my-refresh-token")
-		// Missing: JIRA_BOT_JIRA_CLIENT_SECRET, JIRA_BOT_JIRA_CLOUD_ID
+		// No JIRA_BOT_JIRA_CLIENT_ID, JIRA_BOT_JIRA_CLIENT_SECRET
+		// No JIRA_BOT_JIRA_BASE_URL, JIRA_BOT_JIRA_USERNAME, JIRA_BOT_JIRA_TOKEN
 		LoadConfig()
 		return
 	}
 
-	cmd := exec.Command(os.Args[0], "-test.run=TestLoadConfig_PartialOAuthVars_Fatal")
-	cmd.Env = append(os.Environ(), "TEST_SUBPROCESS_FATAL=1")
-	output, err := cmd.CombinedOutput()
+	cmd := exec.Command(os.Args[0], "-test.run=TestLoadConfig_NoAuthConfig_Fatal")
+	cmd.Env = []string{
+		"TEST_SUBPROCESS_FATAL=1",
+		"HOME=" + os.Getenv("HOME"),
+		"PATH=" + os.Getenv("PATH"),
+	}
+	err := cmd.Run()
 
-	assert.Error(t, err, "LoadConfig should have exited fatally when OAuth vars are partially set")
+	assert.Error(t, err, "LoadConfig should have exited fatally when no auth config is found")
 	if exitErr, ok := err.(*exec.ExitError); ok {
 		assert.False(t, exitErr.Success(), "Process should have exited with non-zero status")
 	}
-	// Verify the error message names the missing vars
-	outputStr := string(output)
-	assert.Contains(t, outputStr, "JIRA_BOT_JIRA_CLIENT_SECRET")
-	assert.Contains(t, outputStr, "JIRA_BOT_JIRA_CLOUD_ID")
 }
 
 // --- Subprocess test helpers for fatal exit paths ---
@@ -357,84 +438,4 @@ func TestLoadConfig_TokenPersistence_InvalidDuration_UsesDefault(t *testing.T) {
 	assert.Equal(t, 30*time.Second, cfg.PollInterval, "should fall back to default on invalid duration")
 }
 
-// --- Property-based tests ---
 
-// Feature: jira-oauth2-migration, Property 1: Config validation names all missing variables
-// **Validates: Requirements 1.5**
-//
-// For any non-empty subset of the four OAuth environment variables that is missing
-// or empty, the fatal error message produced by LoadConfig SHALL contain the name of
-// every missing/empty variable from that subset.
-func TestProperty_ConfigValidationNamesAllMissingVars(t *testing.T) {
-	// We test ValidateOAuthEnv directly since it produces the error message
-	// that LoadConfig passes to log.Fatalf. This avoids subprocess gymnastics
-	// while validating the same property.
-
-	cfg := &quick.Config{MaxCount: 100}
-
-	// Generator: random bitmask 1..14 representing which of the 4 OAuth vars are missing.
-	// Bitmask 0 (none missing = all present) and 15 (all missing = no OAuth attempted) are
-	// excluded because the property only applies when at least one var is set and at least
-	// one is missing (partial configuration).
-	property := func(bitmask uint8) bool {
-		// Map bitmask to range 1..14 (non-empty proper subset of {0,1,2,3})
-		subset := (bitmask % 14) + 1 // 1..14 inclusive
-
-		// Clear all OAuth env vars first
-		for _, name := range OAuthEnvVars {
-			os.Unsetenv(name)
-		}
-
-		// Set the vars whose bits are 1 (these are present); bits that are 0 are missing
-		var expectedMissing []string
-		for i := 0; i < 4; i++ {
-			if subset&(1<<i) != 0 {
-				// Bit is set → this var is present
-				os.Setenv(OAuthEnvVars[i], "some-value")
-			} else {
-				// Bit is not set → this var is missing
-				expectedMissing = append(expectedMissing, OAuthEnvVars[i])
-			}
-		}
-
-		// We only care about cases where the config is partial (some present, some missing)
-		if len(expectedMissing) == 0 || len(expectedMissing) == 4 {
-			// All present or all missing: not a partial config, skip
-			return true
-		}
-
-		// Setup mode: only CLIENT_ID and CLIENT_SECRET set (bits 0 and 1)
-		// This is a valid config (no error), so skip it
-		if subset == 3 { // binary 0011 = CLIENT_ID + CLIENT_SECRET only
-			return true
-		}
-
-		allPresent, _, err := ValidateOAuthEnv()
-		if allPresent {
-			// Should not be all-present if we have missing vars
-			return false
-		}
-		if err == nil {
-			// Should have an error when partial config is detected
-			return false
-		}
-
-		errMsg := err.Error()
-		for _, name := range expectedMissing {
-			if !strings.Contains(errMsg, name) {
-				t.Logf("Error message %q does not contain expected var name %q", errMsg, name)
-				return false
-			}
-		}
-		return true
-	}
-
-	if err := quick.Check(property, cfg); err != nil {
-		t.Errorf("Property 1 failed: %v", err)
-	}
-
-	// Cleanup
-	for _, name := range OAuthEnvVars {
-		os.Unsetenv(name)
-	}
-}

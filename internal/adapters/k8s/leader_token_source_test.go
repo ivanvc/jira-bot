@@ -19,6 +19,12 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 )
 
+func newTestLogger(buf *bytes.Buffer) *log.Logger {
+	l := log.New(buf)
+	l.SetReportTimestamp(false)
+	return l
+}
+
 // newTokenServer creates a test HTTP server that returns valid token responses.
 // Returns the server and a pointer to the request count.
 func newTokenServer(t *testing.T) (*httptest.Server, *atomic.Int32) {

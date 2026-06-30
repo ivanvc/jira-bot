@@ -42,11 +42,16 @@ func (s *Server) registerHandlers() {
 
 	// Register OAuth setup endpoints only when client credentials are present
 	// but no refresh token is configured yet (initial setup mode).
-	if s.Config.JiraClientID != "" && s.Config.JiraClientSecret != "" && s.Config.JiraRefreshToken == "" {
-		(&oauthSetupHandler{
+	if s.Config.AuthMode == "oauth2-setup" {
+		handler := &oauthSetupHandler{
 			clientID:     s.Config.JiraClientID,
 			clientSecret: s.Config.JiraClientSecret,
 			callbackURL:  s.Config.OAuthCallbackURL,
-		}).registerHandler()
+			persistence:  s.State.TokenPersistenceAdapter,
+		}
+		handler.registerHandler()
+		http.HandleFunc("/", handler.handleRootSetup)
+	} else {
+		http.HandleFunc("/", handleRootStatus)
 	}
 }
