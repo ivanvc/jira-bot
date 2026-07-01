@@ -23,7 +23,16 @@ The following is my list of commands:
 * ` + "`/jira create [options]`" + `: Creates a Jira issue with the subject and body from
   this GitHub issue. The following options are available:
 	* ` + "`type:[type]`" + `: Specify the type of the Jira issue to create (i.e., ` + "`type:Bug`" + `, default: ` + "`%s`" + `)
-	* ` + "`project:[project]`" + `: Specify the project of the Jira issue to create (i.e., ` + "`project:ENG`" + `, default: ` + "`%s`" + `)`
+	* ` + "`project:[project]`" + `: Specify the project of the Jira issue to create (i.e., ` + "`project:ENG`" + `, default: ` + "`%s`" + `)
+
+**Custom description:** Text provided after a newline following the command line will be used as the Jira ticket description. If no custom description is provided, the GitHub issue or pull request body is used by default.
+
+Example:
+` + "```" + `
+/jira create project:ENG type:Bug
+This is a custom description for the Jira ticket.
+It can span multiple lines.
+` + "```"
 
 const errorMessageFormat = `:x: Error trying to create issue.
 
@@ -46,7 +55,13 @@ func Run(ctx context.Context, state *common.State, issueComment *github.IssueCom
 		return nil
 	}
 
-	parts := strings.Split(issueComment.Comment.Body, " ")
+	// Parse only the first line for command and options.
+	firstLine := issueComment.Comment.Body
+	if idx := strings.IndexByte(firstLine, '\n'); idx >= 0 {
+		firstLine = firstLine[:idx]
+	}
+
+	parts := strings.Split(firstLine, " ")
 	if len(parts) == 1 {
 		if err := replyWithHelp(ctx, state, issueComment); err != nil {
 			return err
@@ -156,7 +171,15 @@ func createJiraIssue(ctx context.Context, state *common.State, issueComment *git
 		return errors.New("Jira client is not configured (bot is in setup mode)")
 	}
 
-	key, err := state.JiraClient.CreateIssue(project, issueType, issueComment.Issue.Title, fmt.Sprintf("%s\n\nGitHub link: %s\n", issueBody, issueComment.Issue.HTMLURL), extraFields)
+	// Determine description source: use comment body override if present, otherwise fall back to issue body
+	descriptionSource := ExtractDescriptionSource(issueComment.Comment.Body)
+	if descriptionSource == "" {
+		descriptionSource = issueBody
+	}
+
+	description := BuildDescription(descriptionSource, issueComment.Issue.HTMLURL)
+
+	key, err := state.JiraClient.CreateIssue(project, issueType, issueComment.Issue.Title, description, extraFields)
 	if err != nil {
 		return err
 	}

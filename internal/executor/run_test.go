@@ -1018,3 +1018,116 @@ func TestCreateJiraIssue_CommandOnlyFieldsWithNoRepoConfig(t *testing.T) {
 	assert.Equal(t, []interface{}{"hotfix"}, extraFields["labels"])
 	assert.Len(t, extraFields, 2)
 }
+
+// --- 4.1 Description override integration tests ---
+
+func TestCreateJiraIssue_CommentBodyDescriptionOverrideFlowsToCreateIssue(t *testing.T) {
+	// When comment body has text after a newline following the command line,
+	// that text (via BuildDescription) should be passed to CreateIssue as the description.
+	gh := &MockGitHubClient{}
+	jira := &MockJiraClient{ReturnKey: "ENG-700"}
+	state := newTestState(gh, jira)
+
+	commentBody := "/jira create project:ENG\nThis is my custom description"
+	ic := newIssueComment(commentBody, "This is the issue body that should NOT be used")
+
+	err := Run(context.Background(), state, ic)
+
+	require.NoError(t, err)
+	require.Len(t, jira.Calls, 1)
+	assert.Equal(t, "CreateIssue", jira.Calls[0].Method)
+
+	// The description passed to CreateIssue should be built from the custom description source
+	description := jira.Calls[0].Args[3].(string)
+	expectedDescription := BuildDescription("This is my custom description", "https://github.com/org/repo/issues/1")
+	assert.Equal(t, expectedDescription, description)
+
+	// Verify it contains the custom description text and the GitHub link
+	assert.Contains(t, description, "This is my custom description")
+	assert.Contains(t, description, "GitHub link: https://github.com/org/repo/issues/1")
+	// Verify it does NOT contain the issue body
+	assert.NotContains(t, description, "This is the issue body that should NOT be used")
+}
+
+func TestCreateJiraIssue_NoBodyTextUsesIssueBodyAsDescriptionSource(t *testing.T) {
+	// When comment body is just the command line (no newline/body text),
+	// the issue body should be used as the description source.
+	gh := &MockGitHubClient{}
+	jira := &MockJiraClient{ReturnKey: "ENG-800"}
+	state := newTestState(gh, jira)
+
+	commentBody := "/jira create project:ENG"
+	issueBody := "This is the GitHub issue body"
+	ic := newIssueComment(commentBody, issueBody)
+
+	err := Run(context.Background(), state, ic)
+
+	require.NoError(t, err)
+	require.Len(t, jira.Calls, 1)
+	assert.Equal(t, "CreateIssue", jira.Calls[0].Method)
+
+	// The description passed to CreateIssue should be built from the issue body
+	description := jira.Calls[0].Args[3].(string)
+	expectedDescription := BuildDescription("This is the GitHub issue body", "https://github.com/org/repo/issues/1")
+	assert.Equal(t, expectedDescription, description)
+
+	// Verify it contains the issue body and GitHub link
+	assert.Contains(t, description, "This is the GitHub issue body")
+	assert.Contains(t, description, "GitHub link: https://github.com/org/repo/issues/1")
+}
+
+func TestHelpText_IncludesCustomDescriptionDocumentation(t *testing.T) {
+	// The help text should document the custom description feature,
+	// including: what it does, the default behavior, and a usage example.
+	gh := &MockGitHubClient{}
+	jira := &MockJiraClient{}
+	state := newTestState(gh, jira)
+	ic := newIssueComment("/jira help", "")
+
+	err := Run(context.Background(), state, ic)
+
+	require.NoError(t, err)
+	require.Len(t, gh.Calls, 2) // PostComment + ReactWithThumbsUp
+	assert.Equal(t, "PostComment", gh.Calls[0].Method)
+
+	helpText := gh.Calls[0].Args[3].(string)
+
+	// Requirement 3.1: Help text explains that text after a newline is used as description
+	assert.Contains(t, helpText, "Custom description")
+
+	// Requirement 3.2: Help text indicates the default behavior (issue/PR body used)
+	assert.Contains(t, helpText, "default")
+
+	// Requirement 3.3: Help text includes a usage example with /jira create and custom description
+	assert.Contains(t, helpText, "/jira create")
+	assert.Contains(t, helpText, "custom description")
+}
+
+func TestCreateJiraIssue_OptionsParseCorrectlyWithBodyTextOnSubsequentLines(t *testing.T) {
+	// When comment body has options on the first line AND body text on subsequent lines,
+	// both options should parse correctly AND the custom description should be used.
+	gh := &MockGitHubClient{}
+	jira := &MockJiraClient{ReturnKey: "ENG-900"}
+	state := newTestState(gh, jira)
+
+	commentBody := "/jira create project:ENG type:Bug\nCustom description here"
+	ic := newIssueComment(commentBody, "Issue body should not be used")
+
+	err := Run(context.Background(), state, ic)
+
+	require.NoError(t, err)
+	require.Len(t, jira.Calls, 1)
+	assert.Equal(t, "CreateIssue", jira.Calls[0].Method)
+
+	// Verify project and type parsed correctly from the first line
+	assert.Equal(t, "ENG", jira.Calls[0].Args[0])  // project
+	assert.Equal(t, "Bug", jira.Calls[0].Args[1])  // type
+
+	// Verify the custom description is used (not the issue body)
+	description := jira.Calls[0].Args[3].(string)
+	expectedDescription := BuildDescription("Custom description here", "https://github.com/org/repo/issues/1")
+	assert.Equal(t, expectedDescription, description)
+
+	assert.Contains(t, description, "Custom description here")
+	assert.NotContains(t, description, "Issue body should not be used")
+}
