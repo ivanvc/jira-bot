@@ -19,6 +19,7 @@ const (
 	tokenExchangeTimeout  = 15 * time.Second
 	atlassianTokenURL     = "https://auth.atlassian.com/oauth/token"
 	atlassianAuthorizeURL = "https://auth.atlassian.com/authorize"
+	atlassianMyselfURL    = "https://api.atlassian.com/ex/jira/%s/rest/api/3/myself"
 	githubTokenURL        = "https://github.com/login/oauth/access_token"
 	githubUserAPIURL      = "https://api.github.com/user"
 	githubAuthorizeURL    = "https://github.com/login/oauth/authorize"
@@ -38,11 +39,12 @@ type userAuthHandler struct {
 	sessions              *AuthSessionMap
 
 	// URL overrides for testing (empty means use package-level constants)
-	githubAuthorizeURL string
-	githubTokenURL     string
-	githubUserAPIURL   string
-	atlassianTokenURL  string
-	atlassianAuthURL   string
+	githubAuthorizeURL  string
+	githubTokenURL      string
+	githubUserAPIURL    string
+	atlassianTokenURL   string
+	atlassianAuthURL    string
+	atlassianMyselfURL_ string
 }
 
 func (h *userAuthHandler) getGitHubAuthorizeURL() string {
@@ -78,6 +80,51 @@ func (h *userAuthHandler) getAtlassianAuthURL() string {
 		return h.atlassianAuthURL
 	}
 	return atlassianAuthorizeURL
+}
+
+func (h *userAuthHandler) getAtlassianMyselfURL() string {
+	if h.atlassianMyselfURL_ != "" {
+		return h.atlassianMyselfURL_
+	}
+	return atlassianMyselfURL
+}
+
+// fetchAtlassianAccountID calls the /myself endpoint to retrieve the user's accountId.
+// Returns empty string on any failure (non-fatal).
+func (h *userAuthHandler) fetchAtlassianAccountID(ctx context.Context, accessToken, cloudID string) string {
+	myselfURL := fmt.Sprintf(h.getAtlassianMyselfURL(), cloudID)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, myselfURL, nil)
+	if err != nil {
+		log.Warn("Failed to create /myself request", "error", err)
+		return ""
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Accept", "application/json")
+
+	client := &http.Client{Timeout: tokenExchangeTimeout}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Warn("Failed to call /myself endpoint", "error", err)
+		return ""
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		log.Warn("Atlassian /myself returned non-200", "status", resp.StatusCode)
+		return ""
+	}
+
+	var result struct {
+		AccountID string `json:"accountId"`
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if err := json.Unmarshal(body, &result); err != nil {
+		log.Warn("Failed to parse /myself response", "error", err)
+		return ""
+	}
+
+	return result.AccountID
 }
 
 // handleAuthorize initiates the GitHub OAuth flow by redirecting the user to
@@ -245,16 +292,20 @@ func (h *userAuthHandler) handleAtlassianCallback(w http.ResponseWriter, req *ht
 		return
 	}
 
+	ctx, cancel := context.WithTimeout(req.Context(), tokenExchangeTimeout)
+	defer cancel()
+
+	// Fetch the user's Atlassian accountId (non-fatal on failure)
+	accountID := h.fetchAtlassianAccountID(ctx, tokenResp.AccessToken, cloudID)
+
 	// Write token entry to store
 	entry := common.UserTokenEntry{
 		RefreshToken: tokenResp.RefreshToken,
 		AccessToken:  tokenResp.AccessToken,
 		ExpiresAt:    time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second),
 		CloudID:      cloudID,
+		AccountID:    accountID,
 	}
-
-	ctx, cancel := context.WithTimeout(req.Context(), tokenExchangeTimeout)
-	defer cancel()
 
 	if err := h.store.Write(ctx, login, entry); err != nil {
 		log.Error("Failed to write user token entry", "error", err, "login", login)

@@ -131,6 +131,7 @@ helm install jira-bot charts/jira-bot \
 | `JIRA_BOT_GLOBAL_CLOUD_ID` | Yes | — | Atlassian Cloud ID for the target Jira site |
 | `JIRA_BOT_USER_TOKEN_SECRET_NAME` | No | `jira-bot-user-tokens` | K8s Secret name for per-user token storage |
 | `JIRA_BOT_REFRESH_CHECK_INTERVAL` | No | `30s` | How often the leader checks for tokens needing refresh (min: 10s, max: 300s) |
+| `JIRA_BOT_DEFAULT_ASSIGN` | No | `false` | Auto-assign created issues to the user who triggered the command |
 | `JIRA_BOT_LISTEN_HTTP` | No | `:8080` | HTTP listen address |
 | `POD_NAME` | No | — | Pod name (from downward API, enables leader election) |
 | `POD_NAMESPACE` | No | — | Pod namespace (from downward API, enables leader election) |
@@ -215,6 +216,7 @@ If both exist, `.github/jira-bot.yaml` wins. If neither exists, the bot falls ba
 # .github/jira-bot.yaml
 project: ENG
 type: Bug
+assign: true
 fields:
   components:
     - name: Backend
@@ -230,6 +232,7 @@ fields:
 |-------|-------------|
 | `project` | Default Jira project key |
 | `type` | Default Jira issue type |
+| `assign` | Auto-assign issues to creator (`true`/`false`, overrides global default) |
 | `fields` | Map of arbitrary Jira fields included in every issue created from this repo |
 
 All fields are optional. The `fields` map accepts any structure that matches the Jira API schema for your project — scalars, arrays, or nested objects.
@@ -245,6 +248,8 @@ When resolving the project and issue type, the bot uses this priority order:
 | 3 (lowest) | Global config | `JIRA_BOT_JIRA_DEFAULT_PROJECT` env var |
 
 Command-line options always win. The repo config overrides global defaults but is itself overridden by explicit command options.
+
+The `assign` option follows the same priority chain. You can override it per-command with `assign:true` or `assign:false`.
 
 ### Command-Line Field Overrides
 
@@ -282,6 +287,18 @@ Fields follow the same override pattern as `project` and `type`:
 | 2 (lowest) | Repo config `fields` map |
 
 Command-line field values replace repo config values entirely — there is no deep merge. For example, if your repo config defines `components` with two entries and you specify `components:Frontend` on the command line, the final value is `[{"name": "Frontend"}]` (not appended to the repo config list).
+
+### Auto-Assign
+
+When enabled, the bot sets the Jira issue's assignee to the user who ran the command. This requires the user to have completed the OAuth flow (the bot stores their Jira accountId during authorization).
+
+Enable globally with the `JIRA_BOT_DEFAULT_ASSIGN=true` env var, per-repo with `assign: true` in the config file, or per-command with `assign:true`:
+
+```
+/jira create assign:true
+```
+
+If the user's accountId is unavailable (e.g., they authorized before this feature was added), the issue is created without an assignee — no error is shown. Re-authorizing populates the accountId.
 
 ### Error Handling
 

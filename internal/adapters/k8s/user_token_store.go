@@ -29,6 +29,7 @@ type UserTokenEntry struct {
 	ExpiresAt    time.Time `json:"expires_at"`
 	CloudID      string    `json:"cloud_id"`
 	Status       string    `json:"status,omitempty"`
+	AccountID    string    `json:"account_id,omitempty"`
 }
 
 // K8sUserTokenStore implements the UserTokenStore interface backed by a Kubernetes Secret.

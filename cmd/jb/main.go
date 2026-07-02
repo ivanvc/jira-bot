@@ -40,6 +40,7 @@ func (a *refreshStoreAdapter) ReadAll(ctx context.Context) (map[string]jira.Refr
 			AccessToken:  e.AccessToken,
 			ExpiresAt:    e.ExpiresAt,
 			CloudID:      e.CloudID,
+			AccountID:    e.AccountID,
 			Status:       e.Status,
 		}
 	}
@@ -52,6 +53,7 @@ func (a *refreshStoreAdapter) Write(ctx context.Context, login string, entry jir
 		AccessToken:  entry.AccessToken,
 		ExpiresAt:    entry.ExpiresAt,
 		CloudID:      entry.CloudID,
+		AccountID:    entry.AccountID,
 		Status:       entry.Status,
 	})
 }

@@ -1489,3 +1489,133 @@ func TestCreateJiraIssue_OptionsParseCorrectlyWithBodyTextOnSubsequentLines(t *t
 	assert.Contains(t, description, "Custom description here")
 	assert.NotContains(t, description, "Issue body should not be used")
 }
+
+// --- 5.5 createJiraIssue with assign option tests ---
+
+func TestCreateJiraIssue_AssignTrueWithValidAccountId_IncludesAssigneeInExtraFields(t *testing.T) {
+	// Validates: Requirements 4.1
+	// When assign:true is in options AND the user has a stored accountId,
+	// the CreateIssue call includes "assignee" in extraFields.
+	gh := &MockGitHubClient{}
+	jira := &MockJiraClient{ReturnKey: "ASSIGN-101"}
+	resolver := &FlexibleMockResolver{
+		Result: common.JiraClientResolveResult{Client: jira},
+	}
+	store := &MockUserTokenStore{
+		Entries: map[string]common.UserTokenEntry{
+			"testuser": {
+				RefreshToken: "refresh-token",
+				AccessToken:  "access-token",
+				CloudID:      "cloud-123",
+				AccountID:    "5b10ac8d14c1d5",
+			},
+		},
+	}
+	state := &common.State{
+		Config: common.Config{
+			JiraDefaultProject:   "DEFAULT",
+			JiraDefaultIssueType: "Task",
+		},
+		GitHubClient:       gh,
+		JiraClientResolver: resolver,
+		UserTokenStore:     store,
+	}
+
+	ic := newIssueComment("/jira create assign:true", "Issue body")
+
+	err := Run(context.Background(), state, ic)
+
+	require.NoError(t, err)
+	require.Len(t, jira.Calls, 1)
+	assert.Equal(t, "CreateIssue", jira.Calls[0].Method)
+
+	// Verify extraFields contains the assignee with the correct accountId
+	extraFields := jira.Calls[0].Args[4].(map[string]interface{})
+	require.Contains(t, extraFields, "assignee")
+	assignee := extraFields["assignee"].(map[string]interface{})
+	assert.Equal(t, "5b10ac8d14c1d5", assignee["accountId"])
+}
+
+func TestCreateJiraIssue_AssignTrueWithEmptyAccountId_NoAssigneeNoError(t *testing.T) {
+	// Validates: Requirements 4.2, 4.3
+	// When assign:true is in options BUT the user has no accountId (empty string),
+	// CreateIssue is called without assignee and no error is returned.
+	gh := &MockGitHubClient{}
+	jira := &MockJiraClient{ReturnKey: "ASSIGN-102"}
+	resolver := &FlexibleMockResolver{
+		Result: common.JiraClientResolveResult{Client: jira},
+	}
+	store := &MockUserTokenStore{
+		Entries: map[string]common.UserTokenEntry{
+			"testuser": {
+				RefreshToken: "refresh-token",
+				AccessToken:  "access-token",
+				CloudID:      "cloud-123",
+				AccountID:    "", // empty accountId
+			},
+		},
+	}
+	state := &common.State{
+		Config: common.Config{
+			JiraDefaultProject:   "DEFAULT",
+			JiraDefaultIssueType: "Task",
+		},
+		GitHubClient:       gh,
+		JiraClientResolver: resolver,
+		UserTokenStore:     store,
+	}
+
+	ic := newIssueComment("/jira create assign:true", "Issue body")
+
+	err := Run(context.Background(), state, ic)
+
+	require.NoError(t, err)
+	require.Len(t, jira.Calls, 1)
+	assert.Equal(t, "CreateIssue", jira.Calls[0].Method)
+
+	// Verify extraFields does NOT contain "assignee"
+	extraFields := jira.Calls[0].Args[4].(map[string]interface{})
+	assert.NotContains(t, extraFields, "assignee")
+}
+
+func TestCreateJiraIssue_AssignFalse_NoAssigneeRegardlessOfAccountId(t *testing.T) {
+	// Validates: Requirements 4.4
+	// When assign:false is in options AND the user has a stored accountId,
+	// CreateIssue is called without assignee.
+	gh := &MockGitHubClient{}
+	jira := &MockJiraClient{ReturnKey: "ASSIGN-103"}
+	resolver := &FlexibleMockResolver{
+		Result: common.JiraClientResolveResult{Client: jira},
+	}
+	store := &MockUserTokenStore{
+		Entries: map[string]common.UserTokenEntry{
+			"testuser": {
+				RefreshToken: "refresh-token",
+				AccessToken:  "access-token",
+				CloudID:      "cloud-123",
+				AccountID:    "5b10ac8d14c1d5", // valid accountId present
+			},
+		},
+	}
+	state := &common.State{
+		Config: common.Config{
+			JiraDefaultProject:   "DEFAULT",
+			JiraDefaultIssueType: "Task",
+		},
+		GitHubClient:       gh,
+		JiraClientResolver: resolver,
+		UserTokenStore:     store,
+	}
+
+	ic := newIssueComment("/jira create assign:false", "Issue body")
+
+	err := Run(context.Background(), state, ic)
+
+	require.NoError(t, err)
+	require.Len(t, jira.Calls, 1)
+	assert.Equal(t, "CreateIssue", jira.Calls[0].Method)
+
+	// Verify extraFields does NOT contain "assignee"
+	extraFields := jira.Calls[0].Args[4].(map[string]interface{})
+	assert.NotContains(t, extraFields, "assignee")
+}

@@ -161,7 +161,8 @@ func (r *DefaultJiraClientResolver) refreshToken(ctx context.Context, entry comm
 		RefreshToken: tokenResp.RefreshToken,
 		ExpiresAt:    time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second),
 		CloudID:      entry.CloudID,
-		Status:       "", // clear any previous status
+		AccountID:    entry.AccountID, // preserve accountId across refresh
+		Status:       "",              // clear any previous status
 	}
 	// If the response didn't rotate the refresh token, keep the old one.
 	if newEntry.RefreshToken == "" {

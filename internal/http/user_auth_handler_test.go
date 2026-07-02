@@ -484,6 +484,244 @@ func TestHandleAtlassianCallback_EmptyGlobalCloudID(t *testing.T) {
 	assert.Contains(t, body, "Cloud ID")
 }
 
+// TestFetchAtlassianAccountID_Success verifies that when the /myself endpoint
+// returns a valid JSON response with an accountId, the value is stored in the
+// token entry during the OAuth callback flow.
+// Validates: Requirements 1.1, 1.2
+func TestFetchAtlassianAccountID_Success(t *testing.T) {
+	// Mock /myself endpoint returning a valid accountId
+	myselfServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "GET", r.Method)
+		assert.Equal(t, "Bearer test-access-token", r.Header.Get("Authorization"))
+		assert.Equal(t, "application/json", r.Header.Get("Accept"))
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{
+			"accountId":   "5b10ac8d14c1d5xyz",
+			"displayName": "Test User",
+		})
+	}))
+	defer myselfServer.Close()
+
+	// Mock Atlassian token endpoint
+	atlTokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"access_token":  "test-access-token",
+			"refresh_token": "test-refresh-token",
+			"expires_in":    3600,
+		})
+	}))
+	defer atlTokenServer.Close()
+
+	store := newMockUserTokenStore()
+	sessions := NewAuthSessionMap(10 * time.Minute)
+	sessionID, err := sessions.Create("testuser")
+	require.NoError(t, err)
+
+	handler := newTestAuthHandler(store, sessions)
+	handler.atlassianTokenURL = atlTokenServer.URL
+	// The myselfURL uses %s as a format placeholder for cloudID; override with test server
+	handler.atlassianMyselfURL_ = myselfServer.URL + "/%s/rest/api/3/myself"
+
+	req := httptest.NewRequest(http.MethodGet, "/oauth/user/atlassian/callback?code=test-code", nil)
+	req.AddCookie(&http.Cookie{
+		Name:  userAuthSessionCookie,
+		Value: sessionID,
+	})
+	rec := httptest.NewRecorder()
+
+	handler.handleAtlassianCallback(rec, req)
+
+	result := rec.Result()
+	defer result.Body.Close()
+
+	// Should succeed
+	assert.Equal(t, http.StatusOK, result.StatusCode)
+
+	// Verify accountId was stored
+	entry, err := store.Read(context.Background(), "testuser")
+	require.NoError(t, err)
+	assert.Equal(t, "5b10ac8d14c1d5xyz", entry.AccountID)
+	assert.Equal(t, "test-access-token", entry.AccessToken)
+	assert.Equal(t, "test-refresh-token", entry.RefreshToken)
+}
+
+// TestFetchAtlassianAccountID_Non200_CompletesWithoutError verifies that when
+// the /myself endpoint returns a non-200 status, the OAuth callback flow still
+// completes successfully and stores the entry without an accountId.
+// Validates: Requirements 1.3, 1.4
+func TestFetchAtlassianAccountID_Non200_CompletesWithoutError(t *testing.T) {
+	// Mock /myself endpoint returning 403 Forbidden
+	myselfServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		w.Write([]byte(`{"message":"Forbidden"}`))
+	}))
+	defer myselfServer.Close()
+
+	// Mock Atlassian token endpoint
+	atlTokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"access_token":  "test-access-token",
+			"refresh_token": "test-refresh-token",
+			"expires_in":    3600,
+		})
+	}))
+	defer atlTokenServer.Close()
+
+	store := newMockUserTokenStore()
+	sessions := NewAuthSessionMap(10 * time.Minute)
+	sessionID, err := sessions.Create("testuser")
+	require.NoError(t, err)
+
+	handler := newTestAuthHandler(store, sessions)
+	handler.atlassianTokenURL = atlTokenServer.URL
+	handler.atlassianMyselfURL_ = myselfServer.URL + "/%s/rest/api/3/myself"
+
+	req := httptest.NewRequest(http.MethodGet, "/oauth/user/atlassian/callback?code=test-code", nil)
+	req.AddCookie(&http.Cookie{
+		Name:  userAuthSessionCookie,
+		Value: sessionID,
+	})
+	rec := httptest.NewRecorder()
+
+	handler.handleAtlassianCallback(rec, req)
+
+	result := rec.Result()
+	defer result.Body.Close()
+
+	// Flow should still complete successfully
+	assert.Equal(t, http.StatusOK, result.StatusCode)
+	body := rec.Body.String()
+	assert.Contains(t, body, "Authorization Complete")
+
+	// Entry should be stored but without accountId
+	entry, err := store.Read(context.Background(), "testuser")
+	require.NoError(t, err)
+	assert.Equal(t, "", entry.AccountID)
+	assert.Equal(t, "test-access-token", entry.AccessToken)
+	assert.Equal(t, "test-refresh-token", entry.RefreshToken)
+	assert.Equal(t, "test-cloud-id-abc123", entry.CloudID)
+}
+
+// TestFetchAtlassianAccountID_InvalidJSON_CompletesWithoutError verifies that
+// when the /myself endpoint returns invalid JSON, the OAuth callback flow still
+// completes successfully and stores the entry without an accountId.
+// Validates: Requirements 1.3, 1.4
+func TestFetchAtlassianAccountID_InvalidJSON_CompletesWithoutError(t *testing.T) {
+	// Mock /myself endpoint returning invalid JSON
+	myselfServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`not valid json {{{`))
+	}))
+	defer myselfServer.Close()
+
+	// Mock Atlassian token endpoint
+	atlTokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"access_token":  "test-access-token",
+			"refresh_token": "test-refresh-token",
+			"expires_in":    3600,
+		})
+	}))
+	defer atlTokenServer.Close()
+
+	store := newMockUserTokenStore()
+	sessions := NewAuthSessionMap(10 * time.Minute)
+	sessionID, err := sessions.Create("testuser")
+	require.NoError(t, err)
+
+	handler := newTestAuthHandler(store, sessions)
+	handler.atlassianTokenURL = atlTokenServer.URL
+	handler.atlassianMyselfURL_ = myselfServer.URL + "/%s/rest/api/3/myself"
+
+	req := httptest.NewRequest(http.MethodGet, "/oauth/user/atlassian/callback?code=test-code", nil)
+	req.AddCookie(&http.Cookie{
+		Name:  userAuthSessionCookie,
+		Value: sessionID,
+	})
+	rec := httptest.NewRecorder()
+
+	handler.handleAtlassianCallback(rec, req)
+
+	result := rec.Result()
+	defer result.Body.Close()
+
+	// Flow should still complete successfully
+	assert.Equal(t, http.StatusOK, result.StatusCode)
+	body := rec.Body.String()
+	assert.Contains(t, body, "Authorization Complete")
+
+	// Entry should be stored but without accountId
+	entry, err := store.Read(context.Background(), "testuser")
+	require.NoError(t, err)
+	assert.Equal(t, "", entry.AccountID)
+	assert.Equal(t, "test-access-token", entry.AccessToken)
+}
+
+// TestFetchAtlassianAccountID_Standalone verifies the fetchAtlassianAccountID
+// method in isolation to confirm it logs warnings on failure.
+// Validates: Requirements 1.1, 1.4
+func TestFetchAtlassianAccountID_Standalone(t *testing.T) {
+	t.Run("returns accountId on success", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{
+				"accountId": "abc123",
+			})
+		}))
+		defer server.Close()
+
+		handler := &userAuthHandler{
+			atlassianMyselfURL_: server.URL + "/%s/rest/api/3/myself",
+		}
+
+		result := handler.fetchAtlassianAccountID(context.Background(), "token", "cloud-id")
+		assert.Equal(t, "abc123", result)
+	})
+
+	t.Run("returns empty string on non-200", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+		}))
+		defer server.Close()
+
+		handler := &userAuthHandler{
+			atlassianMyselfURL_: server.URL + "/%s/rest/api/3/myself",
+		}
+
+		result := handler.fetchAtlassianAccountID(context.Background(), "token", "cloud-id")
+		assert.Equal(t, "", result)
+	})
+
+	t.Run("returns empty string on invalid JSON", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{broken json`))
+		}))
+		defer server.Close()
+
+		handler := &userAuthHandler{
+			atlassianMyselfURL_: server.URL + "/%s/rest/api/3/myself",
+		}
+
+		result := handler.fetchAtlassianAccountID(context.Background(), "token", "cloud-id")
+		assert.Equal(t, "", result)
+	})
+
+	t.Run("returns empty string on connection error", func(t *testing.T) {
+		handler := &userAuthHandler{
+			atlassianMyselfURL_: "http://localhost:1/%s/rest/api/3/myself",
+		}
+
+		result := handler.fetchAtlassianAccountID(context.Background(), "token", "cloud-id")
+		assert.Equal(t, "", result)
+	})
+}
+
 // TestRenderUserAuthError_HTMLContent verifies that error pages are rendered
 // as HTML with proper structure for various failure modes.
 // Validates: Requirement 2.8

@@ -3,6 +3,7 @@ package common
 import (
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/charmbracelet/log"
@@ -40,6 +41,9 @@ type Config struct {
 
 	// Global Cloud ID for Atlassian site (used when user authorizes)
 	GlobalCloudID string // JIRA_BOT_GLOBAL_CLOUD_ID
+
+	// Auto-assign: whether to set the assignee field when creating issues
+	JiraDefaultAssign bool // JIRA_BOT_DEFAULT_ASSIGN, default false
 }
 
 func LoadConfig() Config {
@@ -74,6 +78,9 @@ func LoadConfig() Config {
 
 	// Global Cloud ID
 	cfg.GlobalCloudID = loadEnvWithDefault("JIRA_BOT_GLOBAL_CLOUD_ID", "")
+
+	// Auto-assign default
+	cfg.JiraDefaultAssign = loadEnvBool("JIRA_BOT_DEFAULT_ASSIGN", false)
 
 	return cfg
 }
@@ -130,4 +137,22 @@ func loadEnvDurationClamped(variable string, fallback, min, max time.Duration) t
 		d = max
 	}
 	return d
+}
+
+// loadEnvBool loads a boolean from an environment variable.
+// Accepts "true"/"1" as true, "false"/"0" as false, everything else uses the fallback.
+func loadEnvBool(variable string, fallback bool) bool {
+	v, ok := os.LookupEnv(variable)
+	if !ok || v == "" {
+		return fallback
+	}
+	switch strings.ToLower(v) {
+	case "true", "1":
+		return true
+	case "false", "0":
+		return false
+	default:
+		log.Warnf("Environment variable %q has invalid bool value %q, using default %v", variable, v, fallback)
+		return fallback
+	}
 }

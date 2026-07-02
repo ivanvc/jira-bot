@@ -90,6 +90,7 @@ type RefreshTokenEntry struct {
 	AccessToken  string    `json:"access_token"`
 	ExpiresAt    time.Time `json:"expires_at"`
 	CloudID      string    `json:"cloud_id"`
+	AccountID    string    `json:"account_id,omitempty"`
 	Status       string    `json:"status,omitempty"`
 }
 
@@ -418,6 +419,7 @@ func (m *MultiUserRefreshManager) doRefresh(ctx context.Context, entry RefreshTo
 		AccessToken:  tokenResp.AccessToken,
 		ExpiresAt:    time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second),
 		CloudID:      entry.CloudID,
+		AccountID:    entry.AccountID,
 		Status:       "", // Clear any previous failed/invalid status.
 	}
 

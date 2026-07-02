@@ -8,6 +8,9 @@ data:
   JIRA_BOT_JIRA_DEFAULT_PROJECT: {{ .Values.config.jira.defaultProject }}
   JIRA_BOT_JIRA_DEFAULT_ISSUE_TYPE: {{ .Values.config.jira.defaultIssueType }}
   JIRA_BOT_GITHUB_APP_ID: {{ .Values.config.githubAppID | quote }}
+  {{- if .Values.config.jira.defaultAssign }}
+  JIRA_BOT_DEFAULT_ASSIGN: {{ .Values.config.jira.defaultAssign | quote }}
+  {{- end }}
   {{- if .Values.config.globalCloudID }}
   JIRA_BOT_GLOBAL_CLOUD_ID: {{ .Values.config.globalCloudID }}
   {{- end }}

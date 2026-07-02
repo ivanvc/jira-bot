@@ -24,6 +24,7 @@ The following is my list of commands:
   this GitHub issue. The following options are available:
 	* ` + "`type:[type]`" + `: Specify the type of the Jira issue to create (i.e., ` + "`type:Bug`" + `, default: ` + "`%s`" + `)
 	* ` + "`project:[project]`" + `: Specify the project of the Jira issue to create (i.e., ` + "`project:ENG`" + `, default: ` + "`%s`" + `)
+	* ` + "`assign:true|false`" + `: Assign the created issue to yourself (default: ` + "`false`" + `)
 
 **Custom description:** Text provided after a newline following the command line will be used as the Jira ticket description. If no custom description is provided, the GitHub issue or pull request body is used by default.
 
@@ -142,6 +143,7 @@ func createJiraIssue(ctx context.Context, state *common.State, issueComment *git
 	// Load repo config if available
 	var repoProject, repoType string
 	var repoFields map[string]interface{}
+	var repoAssign *bool
 	if state.RepoConfigLoader != nil {
 		repoCfg, err := state.RepoConfigLoader.LoadRepoConfig(
 			ctx,
@@ -155,6 +157,7 @@ func createJiraIssue(ctx context.Context, state *common.State, issueComment *git
 		repoProject = repoCfg.Project
 		repoType = repoCfg.Type
 		repoFields = repoCfg.Fields
+		repoAssign = repoCfg.Assign
 	}
 
 	commandProject := loadOptionFromCommand("project", options)
@@ -175,6 +178,23 @@ func createJiraIssue(ctx context.Context, state *common.State, issueComment *git
 	if jiraClient == nil {
 		// Auth link was posted or an error comment was posted; nothing more to do.
 		return nil
+	}
+
+	// Resolve assign option
+	commandAssign := loadOptionFromCommand("assign", options)
+	assignEnabled := resolveAssignOption(commandAssign, repoAssign, state.Config.JiraDefaultAssign)
+
+	// If assign is enabled and user has an accountId, add assignee to extraFields
+	if assignEnabled {
+		accountID := resolveAccountID(ctx, state, issueComment.Comment.User.Login)
+		if accountID != "" {
+			if extraFields == nil {
+				extraFields = make(map[string]interface{})
+			}
+			extraFields["assignee"] = map[string]interface{}{
+				"accountId": accountID,
+			}
+		}
 	}
 
 	// Determine description source: use comment body override if present, otherwise fall back to issue body
@@ -264,6 +284,37 @@ func markTokenInvalid(ctx context.Context, state *common.State, login string) {
 	}
 	entry.Status = "invalid"
 	_ = state.UserTokenStore.Write(ctx, login, entry)
+}
+
+// resolveAssignOption resolves the assign boolean using three-tier priority:
+// command-line > repo config > global config.
+func resolveAssignOption(commandValue string, repoConfigValue *bool, globalValue bool) bool {
+	// Command-line override (highest priority)
+	switch strings.ToLower(commandValue) {
+	case "true":
+		return true
+	case "false":
+		return false
+	}
+	// Repo config (middle priority)
+	if repoConfigValue != nil {
+		return *repoConfigValue
+	}
+	// Global config (lowest priority)
+	return globalValue
+}
+
+// resolveAccountID reads the user's accountId from the token store.
+// Returns empty string if unavailable (no error surfaced to user).
+func resolveAccountID(ctx context.Context, state *common.State, login string) string {
+	if state.UserTokenStore == nil || login == "" {
+		return ""
+	}
+	entry, err := state.UserTokenStore.Read(ctx, login)
+	if err != nil {
+		return ""
+	}
+	return entry.AccountID
 }
 
 // resolveOption returns the first non-empty value in priority order:

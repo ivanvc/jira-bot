@@ -217,3 +217,104 @@ func TestLoadConfig_InvalidDuration_UsesDefault(t *testing.T) {
 	cfg := LoadConfig()
 	assert.Equal(t, 15*time.Second, cfg.LeaseDuration, "should fall back to default on invalid duration")
 }
+
+// --- loadEnvBool tests ---
+
+func TestLoadEnvBool_TrueValues(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+	}{
+		{"lowercase true", "true"},
+		{"uppercase TRUE", "TRUE"},
+		{"mixed case True", "True"},
+		{"numeric 1", "1"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("TEST_BOOL_VAR", tt.value)
+			result := loadEnvBool("TEST_BOOL_VAR", false)
+			assert.True(t, result, "loadEnvBool should return true for %q", tt.value)
+		})
+	}
+}
+
+func TestLoadEnvBool_FalseValues(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+	}{
+		{"lowercase false", "false"},
+		{"uppercase FALSE", "FALSE"},
+		{"mixed case False", "False"},
+		{"numeric 0", "0"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("TEST_BOOL_VAR", tt.value)
+			result := loadEnvBool("TEST_BOOL_VAR", true)
+			assert.False(t, result, "loadEnvBool should return false for %q", tt.value)
+		})
+	}
+}
+
+func TestLoadEnvBool_UnsetUsesFallback(t *testing.T) {
+	// Do NOT set the env var — should use fallback
+	assert.True(t, loadEnvBool("TEST_UNSET_BOOL_VAR", true), "should return fallback true when env var is unset")
+	assert.False(t, loadEnvBool("TEST_UNSET_BOOL_VAR", false), "should return fallback false when env var is unset")
+}
+
+func TestLoadEnvBool_EmptyStringUsesFallback(t *testing.T) {
+	t.Setenv("TEST_BOOL_VAR", "")
+	assert.True(t, loadEnvBool("TEST_BOOL_VAR", true), "should return fallback true when env var is empty")
+	assert.False(t, loadEnvBool("TEST_BOOL_VAR", false), "should return fallback false when env var is empty")
+}
+
+func TestLoadEnvBool_InvalidValueUsesFallback(t *testing.T) {
+	tests := []struct {
+		name     string
+		value    string
+		fallback bool
+	}{
+		{"invalid string with fallback true", "yes", true},
+		{"invalid string with fallback false", "no", false},
+		{"random text with fallback true", "maybe", true},
+		{"random text with fallback false", "2", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("TEST_BOOL_VAR", tt.value)
+			result := loadEnvBool("TEST_BOOL_VAR", tt.fallback)
+			assert.Equal(t, tt.fallback, result, "loadEnvBool should return fallback for invalid value %q", tt.value)
+		})
+	}
+}
+
+// --- JIRA_BOT_DEFAULT_ASSIGN config loading tests ---
+
+func TestLoadConfig_JiraDefaultAssign_True(t *testing.T) {
+	t.Setenv("JIRA_BOT_GITHUB_APP_ID", "12345")
+	t.Setenv("JIRA_BOT_GITHUB_PRIVATE_KEY", "test-private-key")
+	t.Setenv("JIRA_BOT_GITHUB_WEBHOOK_SECRET", "webhook-secret")
+	t.Setenv("JIRA_BOT_JIRA_DEFAULT_PROJECT", "PROJ")
+	t.Setenv("JIRA_BOT_JIRA_DEFAULT_ISSUE_TYPE", "Task")
+	t.Setenv("JIRA_BOT_DEFAULT_ASSIGN", "true")
+
+	cfg := LoadConfig()
+	assert.True(t, cfg.JiraDefaultAssign, "JiraDefaultAssign should be true when env var is 'true'")
+}
+
+func TestLoadConfig_JiraDefaultAssign_DefaultsFalse(t *testing.T) {
+	t.Setenv("JIRA_BOT_GITHUB_APP_ID", "12345")
+	t.Setenv("JIRA_BOT_GITHUB_PRIVATE_KEY", "test-private-key")
+	t.Setenv("JIRA_BOT_GITHUB_WEBHOOK_SECRET", "webhook-secret")
+	t.Setenv("JIRA_BOT_JIRA_DEFAULT_PROJECT", "PROJ")
+	t.Setenv("JIRA_BOT_JIRA_DEFAULT_ISSUE_TYPE", "Task")
+	// Do NOT set JIRA_BOT_DEFAULT_ASSIGN
+
+	cfg := LoadConfig()
+	assert.False(t, cfg.JiraDefaultAssign, "JiraDefaultAssign should default to false when env var is unset")
+}

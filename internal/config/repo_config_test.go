@@ -97,6 +97,51 @@ func TestRepoConfig_IsEmpty_NonEmpty_FieldsSet(t *testing.T) {
 	assert.False(t, cfg.IsEmpty())
 }
 
+func TestRepoConfig_IsEmpty_NonEmpty_AssignSet(t *testing.T) {
+	b := true
+	cfg := RepoConfig{Assign: &b}
+
+	assert.False(t, cfg.IsEmpty())
+}
+
+func TestRepoConfig_IsEmpty_NonEmpty_AssignFalseSet(t *testing.T) {
+	b := false
+	cfg := RepoConfig{Assign: &b}
+
+	assert.False(t, cfg.IsEmpty())
+}
+
+func TestParseRepoConfig_AssignTrue(t *testing.T) {
+	data := []byte("project: ENG\nassign: true\n")
+
+	cfg, err := ParseRepoConfig(data)
+
+	assert.NoError(t, err)
+	assert.Equal(t, "ENG", cfg.Project)
+	assert.NotNil(t, cfg.Assign)
+	assert.True(t, *cfg.Assign)
+}
+
+func TestParseRepoConfig_AssignFalse(t *testing.T) {
+	data := []byte("project: ENG\nassign: false\n")
+
+	cfg, err := ParseRepoConfig(data)
+
+	assert.NoError(t, err)
+	assert.Equal(t, "ENG", cfg.Project)
+	assert.NotNil(t, cfg.Assign)
+	assert.False(t, *cfg.Assign)
+}
+
+func TestParseRepoConfig_AssignAbsent(t *testing.T) {
+	data := []byte("project: ENG\ntype: Story\n")
+
+	cfg, err := ParseRepoConfig(data)
+
+	assert.NoError(t, err)
+	assert.Nil(t, cfg.Assign)
+}
+
 func TestParseRepoConfig_WithFieldsMap(t *testing.T) {
 	data := []byte(`project: ENG
 type: Story

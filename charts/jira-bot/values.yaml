@@ -14,6 +14,8 @@ config:
     defaultProject: ""
     # Required: Default issue type
     defaultIssueType: ""
+    # Optional: Auto-assign created issues to the user who triggered the command (default: false)
+    defaultAssign: false
   # Required: The GitHub App ID
   githubAppID: ""
   namespace: ""
