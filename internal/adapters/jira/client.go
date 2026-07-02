@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/http"
 	"strings"
 
 	"github.com/andygrunwald/go-jira"
@@ -12,72 +11,9 @@ import (
 	"github.com/trivago/tgo/tcontainer"
 )
 
+// Client wraps the go-jira Client and implements common.JiraClientInterface.
 type Client struct {
 	*jira.Client
-}
-
-// oauthBaseURL constructs the Jira API base URL for the given Atlassian Cloud ID.
-func oauthBaseURL(cloudID string) string {
-	return fmt.Sprintf("https://api.atlassian.com/ex/jira/%s", cloudID)
-}
-
-// NewClient returns a new Jira Client using basic authentication.
-func NewClient(baseURL, username, token string) *Client {
-	tp := jira.BasicAuthTransport{
-		Username: username,
-		Password: token,
-	}
-
-	c, err := jira.NewClient(tp.Client(), baseURL)
-	if err != nil {
-		log.Fatal("Error creating Jira client", "error", err)
-		return nil
-	}
-
-	return &Client{c}
-}
-
-// NewOAuthClient returns a Jira Client configured with OAuth 2.0 transport.
-func NewOAuthClient(cloudID, clientID, clientSecret, refreshToken string) *Client {
-	baseURL := oauthBaseURL(cloudID)
-
-	tm := NewTokenManager(clientID, clientSecret, refreshToken)
-
-	transport := &OAuthTransport{
-		Source: tm,
-		Base:   http.DefaultTransport,
-	}
-
-	httpClient := &http.Client{Transport: transport}
-
-	c, err := jira.NewClient(httpClient, baseURL)
-	if err != nil {
-		log.Fatal("Error creating OAuth Jira client", "error", err)
-		return nil
-	}
-
-	return &Client{c}
-}
-
-// NewOAuthClientWithTokenSource returns a Jira Client configured with a custom TokenSource.
-// This allows injecting leader/follower token sources for multi-pod deployments.
-func NewOAuthClientWithTokenSource(cloudID string, source TokenSource) *Client {
-	baseURL := oauthBaseURL(cloudID)
-
-	transport := &OAuthTransport{
-		Source: source,
-		Base:   http.DefaultTransport,
-	}
-
-	httpClient := &http.Client{Transport: transport}
-
-	c, err := jira.NewClient(httpClient, baseURL)
-	if err != nil {
-		log.Fatal("Error creating OAuth Jira client with token source", "error", err)
-		return nil
-	}
-
-	return &Client{c}
 }
 
 func (c *Client) CreateIssue(project, issueType, summary, description string, extraFields map[string]interface{}) (string, error) {
@@ -121,7 +57,6 @@ func (c *Client) CreateIssue(project, issueType, summary, description string, ex
 	r, resp, err := c.Issue.Create(&issue)
 	if err != nil {
 		if resp != nil && resp.Response != nil {
-			// Read the response body for both logging and user-facing error details.
 			var bodyData []byte
 			if resp.Response.Body != nil {
 				bodyData, _ = io.ReadAll(resp.Response.Body)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/ivanvc/jira-bot/internal/adapters/github"
@@ -59,6 +60,18 @@ func (m *MockJiraClient) CreateIssue(project, issueType, summary, description st
 	return m.ReturnKey, m.ReturnErr
 }
 
+// MockJiraClientResolver wraps a MockJiraClient to satisfy common.JiraClientResolver.
+type MockJiraClientResolver struct {
+	Client common.JiraClientInterface
+}
+
+func (r *MockJiraClientResolver) Resolve(ctx context.Context, login string) common.JiraClientResolveResult {
+	if r.Client == nil {
+		return common.JiraClientResolveResult{ErrorMsg: "no client configured"}
+	}
+	return common.JiraClientResolveResult{Client: r.Client}
+}
+
 // Helper to build a minimal IssueComment for testing.
 func newIssueComment(commentBody, issueBody string) *github.IssueComment {
 	return &github.IssueComment{
@@ -72,6 +85,7 @@ func newIssueComment(commentBody, issueBody string) *github.IssueComment {
 			Body:   commentBody,
 			NodeID: "node123",
 			ID:     1,
+			User:   github.CommentUser{Login: "testuser"},
 		},
 		Installation: github.Installation{ID: 42},
 	}
@@ -84,8 +98,8 @@ func newTestState(gh *MockGitHubClient, jira *MockJiraClient) *common.State {
 			JiraDefaultProject:   "DEFAULT",
 			JiraDefaultIssueType: "Task",
 		},
-		GitHubClient: gh,
-		JiraClient:   jira,
+		GitHubClient:       gh,
+		JiraClientResolver: &MockJiraClientResolver{Client: jira},
 	}
 }
 
@@ -294,6 +308,7 @@ func newIssueCommentWithRepo(commentBody, issueBody, owner, repoName string) *gi
 			Body:   commentBody,
 			NodeID: "node123",
 			ID:     1,
+			User:   github.CommentUser{Login: "testuser"},
 		},
 		Installation: github.Installation{ID: 42},
 		Repository: github.Repository{
@@ -458,9 +473,9 @@ func TestCreateJiraIssue_RepoConfigOverridesGlobalConfig(t *testing.T) {
 			JiraDefaultProject:   "GLOBAL-PROJ",
 			JiraDefaultIssueType: "Task",
 		},
-		GitHubClient:     gh,
-		JiraClient:       jira,
-		RepoConfigLoader: loader,
+		GitHubClient:       gh,
+		JiraClientResolver: &MockJiraClientResolver{Client: jira},
+		RepoConfigLoader:   loader,
 	}
 	ic := newIssueCommentWithRepo("/jira create", "Issue body", "myorg", "myrepo")
 
@@ -481,8 +496,8 @@ func TestCreateJiraIssue_NilRepoConfigLoaderFallsBackToGlobalDefaults(t *testing
 			JiraDefaultProject:   "GLOBAL-PROJ",
 			JiraDefaultIssueType: "Task",
 		},
-		GitHubClient: gh,
-		JiraClient:   jira,
+		GitHubClient:       gh,
+		JiraClientResolver: &MockJiraClientResolver{Client: jira},
 		// RepoConfigLoader is nil
 	}
 	ic := newIssueCommentWithRepo("/jira create", "Issue body", "myorg", "myrepo")
@@ -507,9 +522,9 @@ func TestCreateJiraIssue_PartialRepoConfig_ProjectOnly(t *testing.T) {
 			JiraDefaultProject:   "GLOBAL-PROJ",
 			JiraDefaultIssueType: "Task",
 		},
-		GitHubClient:     gh,
-		JiraClient:       jira,
-		RepoConfigLoader: loader,
+		GitHubClient:       gh,
+		JiraClientResolver: &MockJiraClientResolver{Client: jira},
+		RepoConfigLoader:   loader,
 	}
 	ic := newIssueCommentWithRepo("/jira create", "Issue body", "myorg", "myrepo")
 
@@ -532,9 +547,9 @@ func TestCreateJiraIssue_PartialRepoConfig_TypeOnly(t *testing.T) {
 			JiraDefaultProject:   "GLOBAL-PROJ",
 			JiraDefaultIssueType: "Task",
 		},
-		GitHubClient:     gh,
-		JiraClient:       jira,
-		RepoConfigLoader: loader,
+		GitHubClient:       gh,
+		JiraClientResolver: &MockJiraClientResolver{Client: jira},
+		RepoConfigLoader:   loader,
 	}
 	ic := newIssueCommentWithRepo("/jira create", "Issue body", "myorg", "myrepo")
 
@@ -557,9 +572,9 @@ func TestCreateJiraIssue_CommandOptionOverridesPartialRepoConfig(t *testing.T) {
 			JiraDefaultProject:   "GLOBAL-PROJ",
 			JiraDefaultIssueType: "Task",
 		},
-		GitHubClient:     gh,
-		JiraClient:       jira,
-		RepoConfigLoader: loader,
+		GitHubClient:       gh,
+		JiraClientResolver: &MockJiraClientResolver{Client: jira},
+		RepoConfigLoader:   loader,
 	}
 	// Only override project via command, type should come from repo config
 	ic := newIssueCommentWithRepo("/jira create project:CMD-PROJ", "Issue body", "myorg", "myrepo")
@@ -583,9 +598,9 @@ func TestHelpText_ReflectsRepoLevelDefaults(t *testing.T) {
 			JiraDefaultProject:   "GLOBAL-PROJ",
 			JiraDefaultIssueType: "Task",
 		},
-		GitHubClient:     gh,
-		JiraClient:       jira,
-		RepoConfigLoader: loader,
+		GitHubClient:       gh,
+		JiraClientResolver: &MockJiraClientResolver{Client: jira},
+		RepoConfigLoader:   loader,
 	}
 	ic := newIssueCommentWithRepo("/jira help", "", "myorg", "myrepo")
 
@@ -609,8 +624,8 @@ func TestHelpText_UsesGlobalDefaultsWhenNoRepoConfig(t *testing.T) {
 			JiraDefaultProject:   "GLOBAL-PROJ",
 			JiraDefaultIssueType: "GlobalTask",
 		},
-		GitHubClient: gh,
-		JiraClient:   jira,
+		GitHubClient:       gh,
+		JiraClientResolver: &MockJiraClientResolver{Client: jira},
 		// RepoConfigLoader is nil
 	}
 	ic := newIssueCommentWithRepo("/jira help", "", "myorg", "myrepo")
@@ -647,7 +662,7 @@ func TestHelpText_ShowsFieldsSectionWhenFieldsConfigured(t *testing.T) {
 			JiraDefaultIssueType: "Task",
 		},
 		GitHubClient:     gh,
-		JiraClient:       jira,
+		JiraClientResolver: &MockJiraClientResolver{Client: jira},
 		RepoConfigLoader: loader,
 	}
 	ic := newIssueCommentWithRepo("/jira help", "", "myorg", "myrepo")
@@ -677,7 +692,7 @@ func TestHelpText_OmitsFieldsSectionWhenNoFieldsConfigured(t *testing.T) {
 			JiraDefaultIssueType: "Task",
 		},
 		GitHubClient:     gh,
-		JiraClient:       jira,
+		JiraClientResolver: &MockJiraClientResolver{Client: jira},
 		RepoConfigLoader: loader,
 	}
 	ic := newIssueCommentWithRepo("/jira help", "", "myorg", "myrepo")
@@ -706,7 +721,7 @@ func TestHelpText_OmitsFieldsSectionWhenFieldsMapEmpty(t *testing.T) {
 			JiraDefaultIssueType: "Task",
 		},
 		GitHubClient:     gh,
-		JiraClient:       jira,
+		JiraClientResolver: &MockJiraClientResolver{Client: jira},
 		RepoConfigLoader: loader,
 	}
 	ic := newIssueCommentWithRepo("/jira help", "", "myorg", "myrepo")
@@ -740,7 +755,7 @@ func TestHelpText_OmitsFieldsSectionWhenAllFieldValuesNull(t *testing.T) {
 			JiraDefaultIssueType: "Task",
 		},
 		GitHubClient:     gh,
-		JiraClient:       jira,
+		JiraClientResolver: &MockJiraClientResolver{Client: jira},
 		RepoConfigLoader: loader,
 	}
 	ic := newIssueCommentWithRepo("/jira help", "", "myorg", "myrepo")
@@ -771,7 +786,7 @@ func TestHelpText_ShowsOnlyFieldKeyNamesNotValues(t *testing.T) {
 			JiraDefaultIssueType: "Task",
 		},
 		GitHubClient:     gh,
-		JiraClient:       jira,
+		JiraClientResolver: &MockJiraClientResolver{Client: jira},
 		RepoConfigLoader: loader,
 	}
 	ic := newIssueCommentWithRepo("/jira help", "", "myorg", "myrepo")
@@ -1020,6 +1035,349 @@ func TestCreateJiraIssue_CommandOnlyFieldsWithNoRepoConfig(t *testing.T) {
 }
 
 // --- 4.1 Description override integration tests ---
+
+// --- 10.4 Per-user resolver integration tests ---
+
+// FlexibleMockResolver is a more flexible mock for JiraClientResolver that records
+// the login passed to Resolve and returns a configurable result.
+type FlexibleMockResolver struct {
+	Result     common.JiraClientResolveResult
+	CalledWith string
+}
+
+func (r *FlexibleMockResolver) Resolve(ctx context.Context, login string) common.JiraClientResolveResult {
+	r.CalledWith = login
+	return r.Result
+}
+
+// MockUserTokenStore implements common.UserTokenStore for testing.
+type MockUserTokenStore struct {
+	Entries map[string]common.UserTokenEntry
+	Calls   []MockCall
+}
+
+func (m *MockUserTokenStore) Read(ctx context.Context, login string) (common.UserTokenEntry, error) {
+	m.Calls = append(m.Calls, MockCall{Method: "Read", Args: []interface{}{login}})
+	if entry, ok := m.Entries[login]; ok {
+		return entry, nil
+	}
+	return common.UserTokenEntry{}, common.ErrNotFound
+}
+
+func (m *MockUserTokenStore) ReadAll(ctx context.Context) (map[string]common.UserTokenEntry, error) {
+	m.Calls = append(m.Calls, MockCall{Method: "ReadAll"})
+	return m.Entries, nil
+}
+
+func (m *MockUserTokenStore) Write(ctx context.Context, login string, entry common.UserTokenEntry) error {
+	m.Calls = append(m.Calls, MockCall{Method: "Write", Args: []interface{}{login, entry}})
+	if m.Entries == nil {
+		m.Entries = make(map[string]common.UserTokenEntry)
+	}
+	m.Entries[login] = entry
+	return nil
+}
+
+func (m *MockUserTokenStore) Delete(ctx context.Context, login string) error {
+	m.Calls = append(m.Calls, MockCall{Method: "Delete", Args: []interface{}{login}})
+	delete(m.Entries, login)
+	return nil
+}
+
+func TestCreateJiraIssue_ExtractsLoginFromComment(t *testing.T) {
+	// Verifies that the executor extracts Comment.User.Login from the webhook payload
+	// and passes it to the resolver.
+	gh := &MockGitHubClient{}
+	jira := &MockJiraClient{ReturnKey: "PROJ-1"}
+	resolver := &FlexibleMockResolver{
+		Result: common.JiraClientResolveResult{Client: jira},
+	}
+	state := &common.State{
+		Config: common.Config{
+			JiraDefaultProject:   "DEFAULT",
+			JiraDefaultIssueType: "Task",
+		},
+		GitHubClient:       gh,
+		JiraClientResolver: resolver,
+	}
+
+	ic := &github.IssueComment{
+		Action: "created",
+		Issue: github.Issue{
+			Title:   "Test Issue",
+			Body:    "Issue body",
+			HTMLURL: "https://github.com/org/repo/issues/1",
+		},
+		Comment: github.Comment{
+			Body: "/jira create",
+			User: github.CommentUser{Login: "octocat"},
+		},
+		Installation: github.Installation{ID: 42},
+	}
+
+	err := Run(context.Background(), state, ic)
+
+	require.NoError(t, err)
+	// Verify the resolver was called with the login from the comment
+	assert.Equal(t, "octocat", resolver.CalledWith)
+}
+
+func TestCreateJiraIssue_EmptyLogin_PostsError(t *testing.T) {
+	// Verifies that when Comment.User.Login is empty/whitespace, the executor posts
+	// an error comment and does NOT call the resolver.
+	gh := &MockGitHubClient{}
+	jira := &MockJiraClient{ReturnKey: "PROJ-1"}
+	resolver := &FlexibleMockResolver{
+		Result: common.JiraClientResolveResult{Client: jira},
+	}
+	state := &common.State{
+		Config: common.Config{
+			JiraDefaultProject:   "DEFAULT",
+			JiraDefaultIssueType: "Task",
+		},
+		GitHubClient:       gh,
+		JiraClientResolver: resolver,
+	}
+
+	ic := &github.IssueComment{
+		Action: "created",
+		Issue: github.Issue{
+			Title:   "Test Issue",
+			Body:    "Issue body",
+			HTMLURL: "https://github.com/org/repo/issues/1",
+		},
+		Comment: github.Comment{
+			Body: "/jira create",
+			User: github.CommentUser{Login: "   "}, // whitespace-only login
+		},
+		Installation: github.Installation{ID: 42},
+	}
+
+	err := Run(context.Background(), state, ic)
+
+	// The executor should NOT return an error (it handled it by posting a comment)
+	require.NoError(t, err)
+	// Resolver should NOT have been called
+	assert.Empty(t, resolver.CalledWith)
+	// An error comment should have been posted
+	require.True(t, len(gh.Calls) >= 1)
+	var postCommentFound bool
+	for _, call := range gh.Calls {
+		if call.Method == "PostComment" {
+			body := call.Args[3].(string)
+			assert.Contains(t, body, "Could not identify")
+			postCommentFound = true
+			break
+		}
+	}
+	assert.True(t, postCommentFound, "Expected a PostComment call with error message")
+	// Jira should NOT have been called
+	assert.Empty(t, jira.Calls)
+}
+
+func TestCreateJiraIssue_AuthRequired_PostsAuthLink(t *testing.T) {
+	// Verifies that when the resolver returns AuthRequired=true, the executor posts
+	// a comment with the auth link.
+	gh := &MockGitHubClient{}
+	resolver := &FlexibleMockResolver{
+		Result: common.JiraClientResolveResult{
+			AuthRequired: true,
+			AuthLink:     "https://bot.example.com/oauth/user/authorize?login=octocat",
+		},
+	}
+	state := &common.State{
+		Config: common.Config{
+			JiraDefaultProject:   "DEFAULT",
+			JiraDefaultIssueType: "Task",
+		},
+		GitHubClient:       gh,
+		JiraClientResolver: resolver,
+	}
+
+	ic := &github.IssueComment{
+		Action: "created",
+		Issue: github.Issue{
+			Title:   "Test Issue",
+			Body:    "Issue body",
+			HTMLURL: "https://github.com/org/repo/issues/1",
+		},
+		Comment: github.Comment{
+			Body: "/jira create",
+			User: github.CommentUser{Login: "octocat"},
+		},
+		Installation: github.Installation{ID: 42},
+	}
+
+	err := Run(context.Background(), state, ic)
+
+	require.NoError(t, err)
+	// Verify the auth link was posted in a comment
+	require.True(t, len(gh.Calls) >= 1)
+	var authCommentFound bool
+	for _, call := range gh.Calls {
+		if call.Method == "PostComment" {
+			body := call.Args[3].(string)
+			if strings.Contains(body, "authorize") && strings.Contains(body, "https://bot.example.com/oauth/user/authorize?login=octocat") {
+				authCommentFound = true
+				break
+			}
+		}
+	}
+	assert.True(t, authCommentFound, "Expected a PostComment call with auth link")
+}
+
+func TestCreateJiraIssue_ResolverSuccess_CreatesIssue(t *testing.T) {
+	// Verifies that when the resolver returns a valid client, the executor uses it
+	// to create the Jira issue.
+	gh := &MockGitHubClient{}
+	jira := &MockJiraClient{ReturnKey: "TEAM-42"}
+	resolver := &FlexibleMockResolver{
+		Result: common.JiraClientResolveResult{Client: jira},
+	}
+	state := &common.State{
+		Config: common.Config{
+			JiraDefaultProject:   "TEAM",
+			JiraDefaultIssueType: "Story",
+		},
+		GitHubClient:       gh,
+		JiraClientResolver: resolver,
+	}
+
+	ic := &github.IssueComment{
+		Action: "created",
+		Issue: github.Issue{
+			Title:   "My Feature",
+			Body:    "Feature description",
+			HTMLURL: "https://github.com/org/repo/issues/5",
+		},
+		Comment: github.Comment{
+			Body: "/jira create",
+			User: github.CommentUser{Login: "developer"},
+		},
+		Installation: github.Installation{ID: 42},
+	}
+
+	err := Run(context.Background(), state, ic)
+
+	require.NoError(t, err)
+	// Verify the resolver was called with the correct login
+	assert.Equal(t, "developer", resolver.CalledWith)
+	// Verify Jira issue was created
+	require.Len(t, jira.Calls, 1)
+	assert.Equal(t, "CreateIssue", jira.Calls[0].Method)
+	assert.Equal(t, "TEAM", jira.Calls[0].Args[0])
+	assert.Equal(t, "Story", jira.Calls[0].Args[1])
+	assert.Equal(t, "My Feature", jira.Calls[0].Args[2])
+	// Verify success comment was posted
+	var successCommentFound bool
+	for _, call := range gh.Calls {
+		if call.Method == "PostComment" {
+			body := call.Args[3].(string)
+			if strings.Contains(body, "TEAM-42") {
+				successCommentFound = true
+				break
+			}
+		}
+	}
+	assert.True(t, successCommentFound, "Expected a success comment mentioning the issue key")
+}
+
+func TestCreateJiraIssue_401Error_MarksInvalidAndPostsReauthLink(t *testing.T) {
+	// Verifies that when the Jira client returns an error containing "401",
+	// the executor marks the token as invalid and posts a re-auth link.
+	gh := &MockGitHubClient{}
+	jira := &MockJiraClient{ReturnErr: errors.New("Jira API returned 401 Unauthorized")}
+
+	// First call to resolver returns the client (so creation is attempted).
+	// Second call (after invalidation) returns auth required.
+	callCount := 0
+	resolver := &callCountResolver{
+		firstResult: common.JiraClientResolveResult{Client: jira},
+		secondResult: common.JiraClientResolveResult{
+			AuthRequired: true,
+			AuthLink:     "https://bot.example.com/oauth/user/authorize?login=octocat",
+		},
+		callCount: &callCount,
+	}
+
+	store := &MockUserTokenStore{
+		Entries: map[string]common.UserTokenEntry{
+			"octocat": {
+				RefreshToken: "refresh-token",
+				AccessToken:  "access-token",
+				CloudID:      "cloud-123",
+				Status:       "",
+			},
+		},
+	}
+
+	state := &common.State{
+		Config: common.Config{
+			JiraDefaultProject:   "DEFAULT",
+			JiraDefaultIssueType: "Task",
+		},
+		GitHubClient:       gh,
+		JiraClientResolver: resolver,
+		UserTokenStore:     store,
+	}
+
+	ic := &github.IssueComment{
+		Action: "created",
+		Issue: github.Issue{
+			Title:   "Test Issue",
+			Body:    "Issue body",
+			HTMLURL: "https://github.com/org/repo/issues/1",
+		},
+		Comment: github.Comment{
+			Body: "/jira create",
+			User: github.CommentUser{Login: "octocat"},
+		},
+		Installation: github.Installation{ID: 42},
+	}
+
+	err := Run(context.Background(), state, ic)
+
+	// The 401 error still propagates as the return value
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "401")
+
+	// Verify the token was marked invalid in the store
+	entry, readErr := store.Read(context.Background(), "octocat")
+	require.NoError(t, readErr)
+	assert.Equal(t, "invalid", entry.Status)
+
+	// Verify a re-auth link comment was posted
+	var reauthCommentFound bool
+	for _, call := range gh.Calls {
+		if call.Method == "PostComment" {
+			body := call.Args[3].(string)
+			if strings.Contains(body, "re-authorize") || strings.Contains(body, "expired") {
+				reauthCommentFound = true
+				break
+			}
+		}
+	}
+	assert.True(t, reauthCommentFound, "Expected a PostComment call with re-auth link")
+}
+
+// callCountResolver is a mock resolver that returns different results on successive calls.
+// Used to simulate: first call returns client (for issue creation), second call (after
+// invalidation) returns auth required.
+type callCountResolver struct {
+	firstResult  common.JiraClientResolveResult
+	secondResult common.JiraClientResolveResult
+	callCount    *int
+	CalledWith   string
+}
+
+func (r *callCountResolver) Resolve(ctx context.Context, login string) common.JiraClientResolveResult {
+	r.CalledWith = login
+	*r.callCount++
+	if *r.callCount == 1 {
+		return r.firstResult
+	}
+	return r.secondResult
+}
 
 func TestCreateJiraIssue_CommentBodyDescriptionOverrideFlowsToCreateIssue(t *testing.T) {
 	// When comment body has text after a newline following the command line,

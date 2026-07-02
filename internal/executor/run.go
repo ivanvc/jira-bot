@@ -167,8 +167,14 @@ func createJiraIssue(ctx context.Context, state *common.State, issueComment *git
 	commandFields := loadFieldsFromCommand(options)
 	extraFields := MergeFields(repoFields, commandFields)
 
-	if state.JiraClient == nil {
-		return errors.New("Jira client is not configured (bot is in setup mode)")
+	// Resolve the Jira client: per-user via JiraClientResolver, or fallback to global JiraClient.
+	jiraClient, err := resolveJiraClient(ctx, state, issueComment)
+	if err != nil {
+		return err
+	}
+	if jiraClient == nil {
+		// Auth link was posted or an error comment was posted; nothing more to do.
+		return nil
 	}
 
 	// Determine description source: use comment body override if present, otherwise fall back to issue body
@@ -179,8 +185,22 @@ func createJiraIssue(ctx context.Context, state *common.State, issueComment *git
 
 	description := BuildDescription(descriptionSource, issueComment.Issue.HTMLURL)
 
-	key, err := state.JiraClient.CreateIssue(project, issueType, issueComment.Issue.Title, description, extraFields)
+	key, err := jiraClient.CreateIssue(project, issueType, issueComment.Issue.Title, description, extraFields)
 	if err != nil {
+		// If the Jira API returns 401, mark the token entry as invalid and post re-auth link.
+		if state.JiraClientResolver != nil && strings.Contains(err.Error(), "401") {
+			login := strings.TrimSpace(issueComment.Comment.User.Login)
+			if login != "" {
+				// Mark entry invalid by re-resolving (the resolver handles marking).
+				// We need to mark it invalid in the store directly.
+				markTokenInvalid(ctx, state, login)
+				result := state.JiraClientResolver.Resolve(ctx, login)
+				if result.AuthRequired {
+					authMsg := fmt.Sprintf(":lock: Your Jira authorization has expired. Please [re-authorize](%s) and try again.", result.AuthLink)
+					state.GitHubClient.PostComment(ctx, issueComment.Installation.ID, issueComment, authMsg)
+				}
+			}
+		}
 		return err
 	}
 	body := fmt.Sprintf("%s\n\n<!--JIRA_BOT_ISSUE:[%s]-->", issueBody, key)
@@ -189,6 +209,61 @@ func createJiraIssue(ctx context.Context, state *common.State, issueComment *git
 	}
 
 	return state.GitHubClient.PostComment(ctx, issueComment.Installation.ID, issueComment, fmt.Sprintf(successTextFormat, key))
+}
+
+// resolveJiraClient determines which Jira client to use for issue creation.
+// It uses per-user token resolution via JiraClientResolver.
+// Returns (nil, nil) when an auth link or error comment has been posted and the caller should stop.
+// Returns (nil, error) when an unrecoverable error occurs.
+func resolveJiraClient(ctx context.Context, state *common.State, issueComment *github.IssueComment) (common.JiraClientInterface, error) {
+	if state.JiraClientResolver == nil {
+		return nil, errors.New("JiraClientResolver is not configured")
+	}
+
+	// Extract and validate the GitHub user login from the comment.
+	login := strings.TrimSpace(issueComment.Comment.User.Login)
+	if login == "" {
+		errMsg := ":x: Could not identify the GitHub user who issued this command. Please ensure your comment includes valid user information."
+		if err := state.GitHubClient.PostComment(ctx, issueComment.Installation.ID, issueComment, errMsg); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	}
+
+	// Resolve the per-user Jira client.
+	result := state.JiraClientResolver.Resolve(ctx, login)
+
+	if result.AuthRequired {
+		authMsg := fmt.Sprintf(":lock: You need to authorize the bot with your Jira account before creating issues. Please [authorize here](%s) and try again.", result.AuthLink)
+		if err := state.GitHubClient.PostComment(ctx, issueComment.Installation.ID, issueComment, authMsg); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	}
+
+	if result.ErrorMsg != "" {
+		return nil, errors.New(result.ErrorMsg)
+	}
+
+	if result.Client == nil {
+		return nil, errors.New("resolver returned neither a client nor an auth link")
+	}
+
+	return result.Client, nil
+}
+
+// markTokenInvalid marks the user's token entry as invalid in the UserTokenStore.
+// This is called when a Jira API call returns HTTP 401.
+func markTokenInvalid(ctx context.Context, state *common.State, login string) {
+	if state.UserTokenStore == nil {
+		return
+	}
+	entry, err := state.UserTokenStore.Read(ctx, login)
+	if err != nil {
+		return
+	}
+	entry.Status = "invalid"
+	_ = state.UserTokenStore.Write(ctx, login, entry)
 }
 
 // resolveOption returns the first non-empty value in priority order:

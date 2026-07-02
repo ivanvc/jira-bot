@@ -62,6 +62,18 @@ func (m *MockJiraClient) CreateIssue(project, issueType, summary, description st
 	return m.ReturnKey, m.ReturnErr
 }
 
+// MockJiraClientResolver wraps a MockJiraClient to satisfy common.JiraClientResolver.
+type MockJiraClientResolver struct {
+	Client common.JiraClientInterface
+}
+
+func (r *MockJiraClientResolver) Resolve(ctx context.Context, login string) common.JiraClientResolveResult {
+	if r.Client == nil {
+		return common.JiraClientResolveResult{ErrorMsg: "no client configured"}
+	}
+	return common.JiraClientResolveResult{Client: r.Client}
+}
+
 // testWebhookSetup holds the components needed to test the webhook handler.
 type testWebhookSetup struct {
 	mux     *http.ServeMux
@@ -86,15 +98,14 @@ func newTestWebhookSetup(t *testing.T, secret string) *testWebhookSetup {
 			JiraDefaultProject:   "DEFAULT",
 			JiraDefaultIssueType: "Task",
 		},
-		GitHubClient: gh,
-		JiraClient:   jira,
+		GitHubClient:       gh,
+		JiraClientResolver: &MockJiraClientResolver{Client: jira},
 	}
 
-	s := &Server{State: state}
 	h := &webhookHandler{}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/webhooks/github/payload", h.handle(s))
+	mux.HandleFunc("/webhooks/github/payload", h.handleWithState(state))
 
 	ts := httptest.NewServer(mux)
 
@@ -225,7 +236,8 @@ func TestWebhookHandler_ValidSignature_IssueCommentCreated_Returns200(t *testing
 			"body": "/jira create",
 			"node_id": "IC_123",
 			"id": 1,
-			"reactions": {"url": "https://api.github.com/repos/owner/repo/issues/comments/1/reactions"}
+			"reactions": {"url": "https://api.github.com/repos/owner/repo/issues/comments/1/reactions"},
+			"user": {"login": "testuser"}
 		},
 		"installation": {"id": 42}
 	}`)

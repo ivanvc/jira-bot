@@ -56,23 +56,17 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
-            {{- if .Values.tokenPersistence.enabled }}
-            - name: JIRA_BOT_TOKEN_SECRET_NAME
-              value: {{ default (printf "%s-oauth-token" (include "jira-bot.fullname" .)) .Values.tokenPersistence.secretName | quote }}
+            - name: JIRA_BOT_USER_TOKEN_SECRET_NAME
+              value: {{ default (printf "%s-user-tokens" (include "jira-bot.fullname" .)) .Values.perUserTokens.secretName | quote }}
             - name: JIRA_BOT_TOKEN_LEASE_NAME
-              value: {{ default (printf "%s-token-leader" (include "jira-bot.fullname" .)) .Values.tokenPersistence.leaseName | quote }}
-            {{- if .Values.tokenPersistence.pollInterval }}
-            - name: JIRA_BOT_TOKEN_POLL_INTERVAL
-              value: {{ .Values.tokenPersistence.pollInterval | quote }}
-            {{- end }}
-            {{- if .Values.tokenPersistence.leaseDuration }}
+              value: {{ default (printf "%s-leader" (include "jira-bot.fullname" .)) .Values.leaderElection.leaseName | quote }}
+            {{- if .Values.leaderElection.leaseDuration }}
             - name: JIRA_BOT_LEASE_DURATION
-              value: {{ .Values.tokenPersistence.leaseDuration | quote }}
+              value: {{ .Values.leaderElection.leaseDuration | quote }}
             {{- end }}
-            {{- if .Values.tokenPersistence.leaseRenewDeadline }}
+            {{- if .Values.leaderElection.leaseRenewDeadline }}
             - name: JIRA_BOT_LEASE_RENEW_DEADLINE
-              value: {{ .Values.tokenPersistence.leaseRenewDeadline | quote }}
-            {{- end }}
+              value: {{ .Values.leaderElection.leaseRenewDeadline | quote }}
             {{- end }}
           envFrom:
             - configMapRef:

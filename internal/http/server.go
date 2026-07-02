@@ -10,37 +10,24 @@ import (
 type Server struct {
 	*http.Server
 	*common.State
-	Mux *SwitchableMux
 }
 
-// NewServer returns a new Server. It selects the appropriate mux based on the
-// current AuthMode and wraps it in a SwitchableMux so that routes can be
-// atomically swapped later (e.g., after an OAuth setup-to-oauth2 transition).
-// The coordinator parameter is optional (nil for non-setup modes); when provided
-// in setup mode, it is forwarded to BuildSetupMux so the setup handler can
-// trigger a live transition after successful token persistence.
-func NewServer(state *common.State, coordinator TransitionCoordinatorInterface) *Server {
+// NewServer returns a new Server with a standard ServeMux configured for
+// per-user token mode.
+func NewServer(state *common.State) *Server {
 	stdlog := log.Default().StandardLog(log.StandardLogOptions{
 		ForceLevel: log.ErrorLevel,
 	})
 
-	var initialMux *http.ServeMux
-	if state.Config.AuthMode == "oauth2-setup" {
-		initialMux = BuildSetupMux(state, coordinator)
-	} else {
-		initialMux = BuildOAuth2Mux(state)
-	}
-
-	switchable := NewSwitchableMux(initialMux)
+	mux := BuildMux(state)
 
 	return &Server{
 		Server: &http.Server{
 			Addr:     state.Config.ListenHTTP,
-			Handler:  switchable,
+			Handler:  mux,
 			ErrorLog: stdlog,
 		},
 		State: state,
-		Mux:   switchable,
 	}
 }
 

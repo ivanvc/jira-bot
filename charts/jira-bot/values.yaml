@@ -9,13 +9,7 @@ config:
   listenHTTP: ""
   # Optional: log level
   logLevel: ""
-  # Optional: OAuth callback URL (only needed during initial setup)
-  oauthCallbackURL: ""
   jira:
-    # Legacy: Jira Base URL (required for basic auth mode)
-    baseURL: ""
-    # Legacy: Jira username (required for basic auth mode)
-    username: ""
     # Required: Default project
     defaultProject: ""
     # Required: Default issue type
@@ -23,6 +17,8 @@ config:
   # Required: The GitHub App ID
   githubAppID: ""
   namespace: ""
+  # Required: Global Cloud ID for Atlassian site
+  globalCloudID: ""
 
 secrets:
   github:
@@ -30,12 +26,28 @@ secrets:
     webhookSecret: ""
     # Required: GitHub app private key in Base64
     privateKeyBase64: ""
+    # Required: GitHub App client secret (for user-to-server OAuth identity verification)
+    appClientSecret: ""
   jira:
-    # OAuth 2.0 credentials (required for OAuth mode)
+    # Required: Atlassian OAuth 2.0 client ID
     clientID: ""
+    # Required: Atlassian OAuth 2.0 client secret
     clientSecret: ""
-    # Legacy PAT credential (required for basic auth mode)
-    token: ""
+
+# Per-user token configuration
+perUserTokens:
+  # K8s Secret name for storing per-user OAuth tokens
+  secretName: ""  # defaults to {{ fullname }}-user-tokens
+  # Base URL for OAuth callbacks (e.g., https://jira-bot.example.com)
+  callbackURL: ""
+  # Interval for checking tokens needing refresh (default: 30s, min: 10s, max: 300s)
+  refreshCheckInterval: "30s"
+
+# Leader election configuration for multi-user token refresh
+leaderElection:
+  leaseName: ""    # defaults to {{ fullname }}-leader
+  leaseDuration: "15s"
+  leaseRenewDeadline: "10s"
 
 image:
   repository: ivan/jira-bot
@@ -104,15 +116,6 @@ nodeSelector: {}
 tolerations: []
 
 affinity: {}
-
-# Token persistence configuration for OAuth token storage in Kubernetes
-tokenPersistence:
-  enabled: true
-  secretName: ""   # defaults to {{ fullname }}-oauth-token
-  leaseName: ""    # defaults to {{ fullname }}-token-leader
-  pollInterval: "30s"
-  leaseDuration: "15s"
-  leaseRenewDeadline: "10s"
 
 # RBAC configuration for the bot's Kubernetes permissions
 rbac:

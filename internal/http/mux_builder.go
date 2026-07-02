@@ -1,49 +1,42 @@
 package http
 
 import (
+	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/charmbracelet/log"
 	"github.com/ivanvc/jira-bot/internal/common"
 )
 
-// BuildSetupMux creates a new ServeMux configured for oauth2-setup mode.
-// It registers the OAuth setup endpoints (callback, site selection, root setup page)
-// and the webhook handler. The returned mux is independent of http.DefaultServeMux.
-// The coordinator parameter may be nil; if provided, the setup handler will attempt
-// a live transition after successful token persistence.
-func BuildSetupMux(state *common.State, coordinator TransitionCoordinatorInterface) *http.ServeMux {
+const authSessionTTL = 10 * time.Minute
+
+// BuildMux creates a new ServeMux configured for the bot's per-user token mode.
+// It registers the webhook handler, user auth routes, status root handler, and
+// health/readiness endpoints.
+func BuildMux(state *common.State) *http.ServeMux {
 	mux := http.NewServeMux()
 
-	// Webhook handler (must be present in both modes)
+	// Webhook handler
 	wh := &webhookHandler{}
 	mux.HandleFunc("/webhooks/github/payload", wh.handleWithState(state))
 
-	// OAuth setup endpoints
-	handler := &oauthSetupHandler{
-		clientID:     state.Config.JiraClientID,
-		clientSecret: state.Config.JiraClientSecret,
-		callbackURL:  state.Config.OAuthCallbackURL,
-		persistence:  state.TokenPersistenceAdapter,
-		coordinator:  coordinator,
+	// User auth handler (per-user OAuth flow)
+	if state.UserTokenStore != nil {
+		handler := &userAuthHandler{
+			githubAppClientID:     loadGitHubAppClientID(state),
+			githubAppClientSecret: state.Config.GitHubAppClientSecret,
+			atlClientID:           state.Config.JiraClientID,
+			atlClientSecret:       state.Config.JiraClientSecret,
+			atlCallbackURL:        state.Config.UserAuthCallbackURL,
+			globalCloudID:         state.Config.GlobalCloudID,
+			store:                 state.UserTokenStore,
+			sessions:              NewAuthSessionMap(authSessionTTL),
+		}
+		mux.HandleFunc("/oauth/user/authorize", handler.handleAuthorize)
+		mux.HandleFunc("/oauth/user/github/callback", handler.handleGitHubCallback)
+		mux.HandleFunc("/oauth/user/atlassian/callback", handler.handleAtlassianCallback)
 	}
-	mux.HandleFunc("/oauth/jira/callback", handler.handleCallback)
-	mux.HandleFunc("/oauth/jira/select-site", handler.handleSelectSite)
-	mux.HandleFunc("/", handler.handleRootSetup)
-
-	log.Info("Built setup mux", "routes", []string{"/webhooks/github/payload", "/oauth/jira/callback", "/oauth/jira/select-site", "/"})
-	return mux
-}
-
-// BuildOAuth2Mux creates a new ServeMux configured for oauth2 mode.
-// It registers the webhook handler, status root handler, and health/readiness
-// endpoints. The returned mux is independent of http.DefaultServeMux.
-func BuildOAuth2Mux(state *common.State) *http.ServeMux {
-	mux := http.NewServeMux()
-
-	// Webhook handler (must be present in both modes)
-	wh := &webhookHandler{}
-	mux.HandleFunc("/webhooks/github/payload", wh.handleWithState(state))
 
 	// Status root handler
 	mux.HandleFunc("/", handleRootStatus)
@@ -56,6 +49,24 @@ func BuildOAuth2Mux(state *common.State) *http.ServeMux {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	log.Info("Built oauth2 mux", "routes", []string{"/webhooks/github/payload", "/", "/healthz", "/readyz"})
+	log.Info("Built mux", "routes", []string{"/webhooks/github/payload", "/oauth/user/authorize", "/oauth/user/github/callback", "/oauth/user/atlassian/callback", "/", "/healthz", "/readyz"})
 	return mux
+}
+
+// handleRootStatus serves the status landing page at the root URL.
+func handleRootStatus(w http.ResponseWriter, req *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	fmt.Fprint(w, `<!DOCTYPE html>
+<html>
+<head><title>Jira Bot — Running</title></head>
+<body style="font-family: system-ui, sans-serif; max-width: 600px; margin: 40px auto; padding: 0 20px;">
+<h1>Jira Bot</h1>
+<p>The bot is configured and running.</p>
+</body>
+</html>`)
+}
+
+// loadGitHubAppClientID returns the GitHub App ID as a string for use in OAuth redirects.
+func loadGitHubAppClientID(state *common.State) string {
+	return fmt.Sprintf("%d", state.Config.GitHubAppID)
 }

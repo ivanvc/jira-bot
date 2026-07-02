@@ -40,10 +40,16 @@ type Issue struct {
 
 // Comment holds the comment from the IssueComment.
 type Comment struct {
-	Body      string `json:"body"`
-	NodeID    string `json:"node_id"`
-	ID        uint64 `json:"id"`
-	Reactions `json:"reactions"`
+	Body      string      `json:"body"`
+	NodeID    string      `json:"node_id"`
+	ID        uint64      `json:"id"`
+	Reactions Reactions   `json:"reactions"`
+	User      CommentUser `json:"user"`
+}
+
+// CommentUser holds the user who authored a comment.
+type CommentUser struct {
+	Login string `json:"login"`
 }
 
 // Reactions from the Comment.
