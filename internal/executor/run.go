@@ -20,15 +20,19 @@ const helpTextFormat = `Hi there!
 
 The following is my list of commands:
 * ` + "`/jira help`" + `: Prints this message.
-* ` + "`/jira create [options]`" + `: Creates a Jira issue with the subject and body from
-  this GitHub issue. The following options are available:
+* ` + "`/jira create [title words] [options]`" + `: Creates a Jira issue. The following options are available:
 	* ` + "`type:[type]`" + `: Specify the type of the Jira issue to create (i.e., ` + "`type:Bug`" + `, default: ` + "`%s`" + `)
 	* ` + "`project:[project]`" + `: Specify the project of the Jira issue to create (i.e., ` + "`project:ENG`" + `, default: ` + "`%s`" + `)
 	* ` + "`assign:true|false`" + `: Assign the created issue to yourself (default: ` + "`false`" + `)
 
+**Custom title:** Words without a colon become the Jira issue title. If no title words are provided, the GitHub issue or pull request title is used by default. Title words and options can be mixed in any order.
+
 **Custom description:** Text provided after a newline following the command line will be used as the Jira ticket description. If no custom description is provided, the GitHub issue or pull request body is used by default.
 
-Example:
+Examples:
+` + "```" + `
+/jira create My Custom Title project:ENG type:Bug
+` + "```" + `
 ` + "```" + `
 /jira create project:ENG type:Bug
 This is a custom description for the Jira ticket.
@@ -132,6 +136,26 @@ func replyWithHelp(ctx context.Context, state *common.State, issueComment *githu
 }
 
 func createJiraIssue(ctx context.Context, state *common.State, issueComment *github.IssueComment, options []string) error {
+	// Separate title tokens from option tokens.
+	var titleTokens []string
+	var optionTokens []string
+	for _, tok := range options {
+		if strings.Contains(tok, ":") {
+			optionTokens = append(optionTokens, tok)
+		} else {
+			titleTokens = append(titleTokens, tok)
+		}
+	}
+
+	// Determine the issue summary.
+	summary := issueComment.Issue.Title
+	if len(titleTokens) > 0 {
+		summary = strings.Join(titleTokens, " ")
+	}
+
+	// Replace options with optionTokens for all downstream processing.
+	options = optionTokens
+
 	issueBody := issueComment.Issue.Body
 	if strings.Contains(issueBody, "<!--JIRA_BOT_ISSUE") {
 		if err := state.GitHubClient.PostComment(ctx, issueComment.Installation.ID, issueComment, errorAlreadyCreated); err != nil {
@@ -205,7 +229,7 @@ func createJiraIssue(ctx context.Context, state *common.State, issueComment *git
 
 	description := BuildDescription(descriptionSource, issueComment.Issue.HTMLURL)
 
-	key, err := jiraClient.CreateIssue(project, issueType, issueComment.Issue.Title, description, extraFields)
+	key, err := jiraClient.CreateIssue(project, issueType, summary, description, extraFields)
 	if err != nil {
 		// If the Jira API returns 401, mark the token entry as invalid and post re-auth link.
 		if state.JiraClientResolver != nil && strings.Contains(err.Error(), "401") {

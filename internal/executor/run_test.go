@@ -1492,6 +1492,129 @@ func TestCreateJiraIssue_OptionsParseCorrectlyWithBodyTextOnSubsequentLines(t *t
 
 // --- 5.5 createJiraIssue with assign option tests ---
 
+// --- Title override tests ---
+
+func TestCreateJiraIssue_TitleOverride_CustomTitleWithOptions(t *testing.T) {
+	// /jira create My Custom Title project:ENG → summary = "My Custom Title", project = "ENG"
+	gh := &MockGitHubClient{}
+	jira := &MockJiraClient{ReturnKey: "ENG-111"}
+	state := newTestState(gh, jira)
+	ic := newIssueComment("/jira create My Custom Title project:ENG", "Issue body")
+
+	err := Run(context.Background(), state, ic)
+
+	require.NoError(t, err)
+	require.Len(t, jira.Calls, 1)
+	assert.Equal(t, "CreateIssue", jira.Calls[0].Method)
+	assert.Equal(t, "My Custom Title", jira.Calls[0].Args[2]) // summary
+	assert.Equal(t, "ENG", jira.Calls[0].Args[0])             // project
+}
+
+func TestCreateJiraIssue_TitleOverride_AllOptionsNoTitle(t *testing.T) {
+	// /jira create project:ENG type:Bug → summary = GitHub issue title
+	gh := &MockGitHubClient{}
+	jira := &MockJiraClient{ReturnKey: "ENG-222"}
+	state := newTestState(gh, jira)
+	ic := newIssueComment("/jira create project:ENG type:Bug", "Issue body")
+
+	err := Run(context.Background(), state, ic)
+
+	require.NoError(t, err)
+	require.Len(t, jira.Calls, 1)
+	assert.Equal(t, "CreateIssue", jira.Calls[0].Method)
+	assert.Equal(t, "Test Issue", jira.Calls[0].Args[2]) // summary = GitHub issue title
+	assert.Equal(t, "ENG", jira.Calls[0].Args[0])        // project
+	assert.Equal(t, "Bug", jira.Calls[0].Args[1])        // type
+}
+
+func TestCreateJiraIssue_TitleOverride_TitleWithMultipleOptions(t *testing.T) {
+	// /jira create Fix the login bug type:Bug assign:true → summary = "Fix the login bug", type = "Bug", assign processed
+	gh := &MockGitHubClient{}
+	jira := &MockJiraClient{ReturnKey: "DEFAULT-333"}
+	resolver := &FlexibleMockResolver{
+		Result: common.JiraClientResolveResult{Client: jira},
+	}
+	store := &MockUserTokenStore{
+		Entries: map[string]common.UserTokenEntry{
+			"testuser": {
+				RefreshToken: "refresh-token",
+				AccessToken:  "access-token",
+				CloudID:      "cloud-123",
+				AccountID:    "5b10ac8d14c1d5",
+			},
+		},
+	}
+	state := &common.State{
+		Config: common.Config{
+			JiraDefaultProject:   "DEFAULT",
+			JiraDefaultIssueType: "Task",
+		},
+		GitHubClient:       gh,
+		JiraClientResolver: resolver,
+		UserTokenStore:     store,
+	}
+	ic := newIssueComment("/jira create Fix the login bug type:Bug assign:true", "Issue body")
+
+	err := Run(context.Background(), state, ic)
+
+	require.NoError(t, err)
+	require.Len(t, jira.Calls, 1)
+	assert.Equal(t, "CreateIssue", jira.Calls[0].Method)
+	assert.Equal(t, "Fix the login bug", jira.Calls[0].Args[2]) // summary
+	assert.Equal(t, "Bug", jira.Calls[0].Args[1])               // type
+	// assign:true should have added assignee to extraFields
+	extraFields := jira.Calls[0].Args[4].(map[string]interface{})
+	require.Contains(t, extraFields, "assignee")
+	assignee := extraFields["assignee"].(map[string]interface{})
+	assert.Equal(t, "5b10ac8d14c1d5", assignee["accountId"])
+}
+
+func TestCreateJiraIssue_TitleOverride_NoTokensFallsBackToGitHubTitle(t *testing.T) {
+	// /jira create with no tokens → summary = GitHub issue title
+	gh := &MockGitHubClient{}
+	jira := &MockJiraClient{ReturnKey: "DEFAULT-444"}
+	state := newTestState(gh, jira)
+	ic := newIssueComment("/jira create", "Issue body")
+
+	err := Run(context.Background(), state, ic)
+
+	require.NoError(t, err)
+	require.Len(t, jira.Calls, 1)
+	assert.Equal(t, "CreateIssue", jira.Calls[0].Method)
+	assert.Equal(t, "Test Issue", jira.Calls[0].Args[2]) // summary = GitHub issue title
+}
+
+func TestCreateJiraIssue_TitleOverride_SingleTitleToken(t *testing.T) {
+	// /jira create Refactor → summary = "Refactor"
+	gh := &MockGitHubClient{}
+	jira := &MockJiraClient{ReturnKey: "DEFAULT-555"}
+	state := newTestState(gh, jira)
+	ic := newIssueComment("/jira create Refactor", "Issue body")
+
+	err := Run(context.Background(), state, ic)
+
+	require.NoError(t, err)
+	require.Len(t, jira.Calls, 1)
+	assert.Equal(t, "CreateIssue", jira.Calls[0].Method)
+	assert.Equal(t, "Refactor", jira.Calls[0].Args[2]) // summary
+}
+
+func TestCreateJiraIssue_TitleOverride_InterleavedTitleAndOptions(t *testing.T) {
+	// /jira create Hello project:ENG World → summary = "Hello World"
+	gh := &MockGitHubClient{}
+	jira := &MockJiraClient{ReturnKey: "ENG-666"}
+	state := newTestState(gh, jira)
+	ic := newIssueComment("/jira create Hello project:ENG World", "Issue body")
+
+	err := Run(context.Background(), state, ic)
+
+	require.NoError(t, err)
+	require.Len(t, jira.Calls, 1)
+	assert.Equal(t, "CreateIssue", jira.Calls[0].Method)
+	assert.Equal(t, "Hello World", jira.Calls[0].Args[2]) // summary
+	assert.Equal(t, "ENG", jira.Calls[0].Args[0])         // project
+}
+
 func TestCreateJiraIssue_AssignTrueWithValidAccountId_IncludesAssigneeInExtraFields(t *testing.T) {
 	// Validates: Requirements 4.1
 	// When assign:true is in options AND the user has a stored accountId,
