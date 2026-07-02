@@ -1742,3 +1742,144 @@ func TestCreateJiraIssue_AssignFalse_NoAssigneeRegardlessOfAccountId(t *testing.
 	extraFields := jira.Calls[0].Args[4].(map[string]interface{})
 	assert.NotContains(t, extraFields, "assignee")
 }
+
+// --- 3.6 Integration tests for full Run flow with quoted field values ---
+
+func TestRun_QuotedFieldValue_PriorityInProgress(t *testing.T) {
+	// /jira create priority:"In Progress" project:ENG
+	// Validates: Requirements 1.1, 2.1, 2.3
+	gh := &MockGitHubClient{}
+	jira := &MockJiraClient{ReturnKey: "ENG-Q01"}
+	state := newTestState(gh, jira)
+	ic := newIssueComment(`/jira create priority:"In Progress" project:ENG`, "Issue body")
+
+	err := Run(context.Background(), state, ic)
+
+	require.NoError(t, err)
+	require.Len(t, jira.Calls, 1)
+	assert.Equal(t, "CreateIssue", jira.Calls[0].Method)
+	assert.Equal(t, "ENG", jira.Calls[0].Args[0]) // project
+
+	// Verify priority field receives the unquoted value "In Progress"
+	extraFields := jira.Calls[0].Args[4].(map[string]interface{})
+	// priority is a well-known field → coerced to {"name": "In Progress"}
+	assert.Equal(t, map[string]interface{}{"name": "In Progress"}, extraFields["priority"])
+}
+
+func TestRun_QuotedTitle_MyCustomTitle(t *testing.T) {
+	// /jira create "My Custom Title" type:Bug
+	// Validates: Requirements 1.2, 2.2
+	gh := &MockGitHubClient{}
+	jira := &MockJiraClient{ReturnKey: "DEFAULT-Q02"}
+	state := newTestState(gh, jira)
+	ic := newIssueComment(`/jira create "My Custom Title" type:Bug`, "Issue body")
+
+	err := Run(context.Background(), state, ic)
+
+	require.NoError(t, err)
+	require.Len(t, jira.Calls, 1)
+	assert.Equal(t, "CreateIssue", jira.Calls[0].Method)
+	assert.Equal(t, "My Custom Title", jira.Calls[0].Args[2]) // summary
+	assert.Equal(t, "Bug", jira.Calls[0].Args[1])             // type
+}
+
+func TestRun_MixedQuotedAndUnquoted_FullCommand(t *testing.T) {
+	// /jira create Fix Bug priority:"In Progress" project:ENG type:Bug
+	// Validates: Requirements 1.1, 1.3, 2.1, 2.3, 3.1
+	gh := &MockGitHubClient{}
+	jira := &MockJiraClient{ReturnKey: "ENG-Q03"}
+	state := newTestState(gh, jira)
+	ic := newIssueComment(`/jira create Fix Bug priority:"In Progress" project:ENG type:Bug`, "Issue body")
+
+	err := Run(context.Background(), state, ic)
+
+	require.NoError(t, err)
+	require.Len(t, jira.Calls, 1)
+	assert.Equal(t, "CreateIssue", jira.Calls[0].Method)
+	assert.Equal(t, "Fix Bug", jira.Calls[0].Args[2]) // summary (title tokens joined)
+	assert.Equal(t, "ENG", jira.Calls[0].Args[0])     // project
+	assert.Equal(t, "Bug", jira.Calls[0].Args[1])     // type
+
+	// Verify priority field receives "In Progress"
+	extraFields := jira.Calls[0].Args[4].(map[string]interface{})
+	assert.Equal(t, map[string]interface{}{"name": "In Progress"}, extraFields["priority"])
+}
+
+func TestRun_UnquotedTitleWithQuotedStatus(t *testing.T) {
+	// /jira create My Custom Title project:ENG status:"In Progress"
+	// Validates: Requirements 1.1, 2.1, 3.2
+	gh := &MockGitHubClient{}
+	jira := &MockJiraClient{ReturnKey: "ENG-Q04"}
+	state := newTestState(gh, jira)
+	ic := newIssueComment(`/jira create My Custom Title project:ENG status:"In Progress"`, "Issue body")
+
+	err := Run(context.Background(), state, ic)
+
+	require.NoError(t, err)
+	require.Len(t, jira.Calls, 1)
+	assert.Equal(t, "CreateIssue", jira.Calls[0].Method)
+	assert.Equal(t, "My Custom Title", jira.Calls[0].Args[2]) // summary (title tokens joined)
+	assert.Equal(t, "ENG", jira.Calls[0].Args[0])             // project
+
+	// Verify status field receives "In Progress" (status is not a well-known field, so raw string)
+	extraFields := jira.Calls[0].Args[4].(map[string]interface{})
+	assert.Equal(t, "In Progress", extraFields["status"])
+}
+
+// --- 3.3 tokenizeLine unit tests ---
+
+func TestTokenizeLine(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected []string
+	}{
+		{
+			name:     "quoted field value",
+			input:    `priority:"In Progress"`,
+			expected: []string{"priority:In Progress"},
+		},
+		{
+			name:     "quoted title",
+			input:    `"My Title" type:Bug`,
+			expected: []string{"My Title", "type:Bug"},
+		},
+		{
+			name:     "multiple quoted fields",
+			input:    `priority:"In Progress" status:"To Do"`,
+			expected: []string{"priority:In Progress", "status:To Do"},
+		},
+		{
+			name:     "mixed quoted and unquoted",
+			input:    `Fix Bug priority:"In Progress" project:ENG`,
+			expected: []string{"Fix", "Bug", "priority:In Progress", "project:ENG"},
+		},
+		{
+			name:     "unclosed quote treats remaining as one token",
+			input:    `priority:"In Progress`,
+			expected: []string{"priority:In Progress"},
+		},
+		{
+			name:     "empty quotes",
+			input:    `key:""`,
+			expected: []string{"key:"},
+		},
+		{
+			name:     "quoted single word value",
+			input:    `type:"Bug"`,
+			expected: []string{"type:Bug"},
+		},
+		{
+			name:     "no quotes",
+			input:    `priority:High type:Bug`,
+			expected: []string{"priority:High", "type:Bug"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := tokenizeLine(tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}

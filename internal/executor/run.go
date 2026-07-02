@@ -54,6 +54,37 @@ const errorMessageFormat = `:x: Error trying to create issue.
 // The caller should not post an additional error comment for this case.
 var errAlreadyCreated = errors.New("a Jira issue seems to have been already created")
 
+// tokenizeLine splits an input string into tokens respecting double-quoted segments.
+// Quoted content (including spaces) is preserved as a single token with quote characters
+// stripped. Unquoted spaces delimit tokens. Unclosed quotes treat remaining content as
+// one token.
+func tokenizeLine(input string) []string {
+	var tokens []string
+	var buf strings.Builder
+	inQuotes := false
+
+	for i := 0; i < len(input); i++ {
+		ch := input[i]
+		switch {
+		case ch == '"':
+			inQuotes = !inQuotes
+		case ch == ' ' && !inQuotes:
+			if buf.Len() > 0 {
+				tokens = append(tokens, buf.String())
+				buf.Reset()
+			}
+		default:
+			buf.WriteByte(ch)
+		}
+	}
+
+	if buf.Len() > 0 {
+		tokens = append(tokens, buf.String())
+	}
+
+	return tokens
+}
+
 // Run executes the webhook and takes action if required.
 func Run(ctx context.Context, state *common.State, issueComment *github.IssueComment) error {
 	if !strings.HasPrefix(issueComment.Comment.Body, "/jira") {
@@ -66,7 +97,7 @@ func Run(ctx context.Context, state *common.State, issueComment *github.IssueCom
 		firstLine = firstLine[:idx]
 	}
 
-	parts := strings.Split(firstLine, " ")
+	parts := tokenizeLine(firstLine)
 	if len(parts) == 1 {
 		if err := replyWithHelp(ctx, state, issueComment); err != nil {
 			return err
