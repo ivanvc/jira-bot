@@ -9,6 +9,13 @@ config:
   listenHTTP: ""
   # Optional: log level
   logLevel: ""
+  # Required: Base URL where the bot is publicly accessible (no trailing slash)
+  # e.g., https://jira-bot.example.com
+  callbackURL: ""
+  # K8s Secret name for storing per-user OAuth tokens (defaults to {{ fullname }}-user-tokens)
+  tokenSecretName: ""
+  # Interval for checking tokens needing refresh (default: 30s, min: 10s, max: 300s)
+  refreshCheckInterval: "30s"
   jira:
     # Required: Default project
     defaultProject: ""
@@ -16,11 +23,11 @@ config:
     defaultIssueType: ""
     # Optional: Auto-assign created issues to the user who triggered the command (default: false)
     defaultAssign: false
+    # Required: Atlassian Cloud ID for the target Jira site
+    cloudID: ""
   # Required: The GitHub App ID
   githubAppID: ""
   namespace: ""
-  # Required: Global Cloud ID for Atlassian site
-  globalCloudID: ""
 
 secrets:
   github:
@@ -35,15 +42,6 @@ secrets:
     clientID: ""
     # Required: Atlassian OAuth 2.0 client secret
     clientSecret: ""
-
-# Per-user token configuration
-perUserTokens:
-  # K8s Secret name for storing per-user OAuth tokens
-  secretName: ""  # defaults to {{ fullname }}-user-tokens
-  # Base URL for OAuth callbacks (e.g., https://jira-bot.example.com)
-  callbackURL: ""
-  # Interval for checking tokens needing refresh (default: 30s, min: 10s, max: 300s)
-  refreshCheckInterval: "30s"
 
 # Leader election configuration for multi-user token refresh
 leaderElection:

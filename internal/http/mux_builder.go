@@ -29,7 +29,7 @@ func BuildMux(state *common.State) *http.ServeMux {
 			atlClientID:           state.Config.JiraClientID,
 			atlClientSecret:       state.Config.JiraClientSecret,
 			atlCallbackURL:        state.Config.UserAuthCallbackURL,
-			globalCloudID:         state.Config.GlobalCloudID,
+			cloudID:               state.Config.CloudID,
 			store:                 state.UserTokenStore,
 			sessions:              NewAuthSessionMap(authSessionTTL),
 		}

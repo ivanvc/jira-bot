@@ -33,7 +33,7 @@ type DefaultJiraClientResolver struct {
 	store           common.UserTokenStore
 	clientID        string
 	clientSecret    string
-	globalCloudID   string
+	cloudID         string
 	callbackBaseURL string
 	logger          *log.Logger
 }
@@ -42,7 +42,7 @@ type DefaultJiraClientResolver struct {
 func NewDefaultJiraClientResolver(
 	store common.UserTokenStore,
 	clientID, clientSecret string,
-	globalCloudID string,
+	cloudID string,
 	callbackBaseURL string,
 	logger *log.Logger,
 ) *DefaultJiraClientResolver {
@@ -50,7 +50,7 @@ func NewDefaultJiraClientResolver(
 		store:           store,
 		clientID:        clientID,
 		clientSecret:    clientSecret,
-		globalCloudID:   globalCloudID,
+		cloudID:         cloudID,
 		callbackBaseURL: callbackBaseURL,
 		logger:          logger,
 	}
@@ -184,7 +184,7 @@ func (r *DefaultJiraClientResolver) markInvalid(ctx context.Context, login strin
 func (r *DefaultJiraClientResolver) buildClientResult(entry common.UserTokenEntry) common.JiraClientResolveResult {
 	cloudID := entry.CloudID
 	if cloudID == "" {
-		cloudID = r.globalCloudID
+		cloudID = r.cloudID
 	}
 
 	baseURL := fmt.Sprintf("https://api.atlassian.com/ex/jira/%s", cloudID)
@@ -209,6 +209,9 @@ func (r *DefaultJiraClientResolver) buildClientResult(entry common.UserTokenEntr
 
 // authRequiredResult builds a result indicating the user must authorize.
 func (r *DefaultJiraClientResolver) authRequiredResult(login string) common.JiraClientResolveResult {
+	if r.callbackBaseURL == "" {
+		r.logger.Warn("JIRA_BOT_USER_AUTH_CALLBACK_URL is empty — auth link will be a relative URL that won't work on GitHub")
+	}
 	authLink := fmt.Sprintf("%s/oauth/user/authorize?login=%s", r.callbackBaseURL, login)
 	return common.JiraClientResolveResult{
 		AuthRequired: true,

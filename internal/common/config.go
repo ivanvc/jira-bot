@@ -39,8 +39,8 @@ type Config struct {
 	UserAuthCallbackURL   string        // JIRA_BOT_USER_AUTH_CALLBACK_URL
 	RefreshCheckInterval  time.Duration // JIRA_BOT_REFRESH_CHECK_INTERVAL, default 30s, clamped [10s, 300s]
 
-	// Global Cloud ID for Atlassian site (used when user authorizes)
-	GlobalCloudID string // JIRA_BOT_GLOBAL_CLOUD_ID
+	// Atlassian Cloud ID for the target Jira site
+	CloudID string // JIRA_BOT_CLOUD_ID
 
 	// Auto-assign: whether to set the assignee field when creating issues
 	JiraDefaultAssign bool // JIRA_BOT_DEFAULT_ASSIGN, default false
@@ -76,8 +76,8 @@ func LoadConfig() Config {
 	cfg.UserAuthCallbackURL = loadEnvWithDefault("JIRA_BOT_USER_AUTH_CALLBACK_URL", "")
 	cfg.RefreshCheckInterval = loadEnvDurationClamped("JIRA_BOT_REFRESH_CHECK_INTERVAL", 30*time.Second, 10*time.Second, 300*time.Second)
 
-	// Global Cloud ID
-	cfg.GlobalCloudID = loadEnvWithDefault("JIRA_BOT_GLOBAL_CLOUD_ID", "")
+	// Cloud ID
+	cfg.CloudID = loadEnvWithDefault("JIRA_BOT_CLOUD_ID", "")
 
 	// Auto-assign default
 	cfg.JiraDefaultAssign = loadEnvBool("JIRA_BOT_DEFAULT_ASSIGN", false)

@@ -60,7 +60,7 @@ func newTestAuthHandler(store *mockUserTokenStore, sessions *AuthSessionMap) *us
 		atlClientID:           "test-atl-client-id",
 		atlClientSecret:       "test-atl-client-secret",
 		atlCallbackURL:        "http://localhost:8080/oauth/user/atlassian/callback",
-		globalCloudID:         "test-cloud-id-abc123",
+		cloudID:               "test-cloud-id-abc123",
 		store:                 store,
 		sessions:              sessions,
 	}
@@ -401,10 +401,10 @@ func TestHandleAtlassianCallback_TokenExchangeTimeout(t *testing.T) {
 		"token exchange timeout should be 15 seconds")
 }
 
-// TestHandleAtlassianCallback_UsesGlobalCloudID verifies that the handler uses
-// the globally configured Cloud ID for multi-site selection.
+// TestHandleAtlassianCallback_UsesCloudID verifies that the handler uses
+// the configured Cloud ID for multi-site selection.
 // Validates: Requirement 2.7
-func TestHandleAtlassianCallback_UsesGlobalCloudID(t *testing.T) {
+func TestHandleAtlassianCallback_UsesCloudID(t *testing.T) {
 	// Mock Atlassian token endpoint
 	atlTokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -424,7 +424,7 @@ func TestHandleAtlassianCallback_UsesGlobalCloudID(t *testing.T) {
 	// Handler with specific global Cloud ID
 	handler := newTestAuthHandler(store, sessions)
 	handler.atlassianTokenURL = atlTokenServer.URL
-	handler.globalCloudID = "specific-cloud-id-999"
+	handler.cloudID = "specific-cloud-id-999"
 
 	req := httptest.NewRequest(http.MethodGet, "/oauth/user/atlassian/callback?code=xyz", nil)
 	req.AddCookie(&http.Cookie{
@@ -442,10 +442,10 @@ func TestHandleAtlassianCallback_UsesGlobalCloudID(t *testing.T) {
 		"stored token entry should use the global Cloud ID from config")
 }
 
-// TestHandleAtlassianCallback_EmptyGlobalCloudID verifies that an error page is
-// rendered when no global Cloud ID is configured.
+// TestHandleAtlassianCallback_EmptyCloudID verifies that an error page is
+// rendered when no Cloud ID is configured.
 // Validates: Requirement 2.7
-func TestHandleAtlassianCallback_EmptyGlobalCloudID(t *testing.T) {
+func TestHandleAtlassianCallback_EmptyCloudID(t *testing.T) {
 	// Mock Atlassian token endpoint that succeeds
 	atlTokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -464,7 +464,7 @@ func TestHandleAtlassianCallback_EmptyGlobalCloudID(t *testing.T) {
 
 	handler := newTestAuthHandler(store, sessions)
 	handler.atlassianTokenURL = atlTokenServer.URL
-	handler.globalCloudID = "" // no cloud ID configured
+	handler.cloudID = "" // no cloud ID configured
 
 	req := httptest.NewRequest(http.MethodGet, "/oauth/user/atlassian/callback?code=xyz", nil)
 	req.AddCookie(&http.Cookie{

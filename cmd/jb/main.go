@@ -102,11 +102,16 @@ func main() {
 
 	// Create the JiraClientResolver (uses UserTokenStore for per-user token resolution).
 	if state.UserTokenStore != nil {
+		if cfg.UserAuthCallbackURL == "" {
+			log.Warn("JIRA_BOT_USER_AUTH_CALLBACK_URL is not set — auth links will be broken")
+		} else {
+			log.Info("OAuth callback base URL configured", "url", cfg.UserAuthCallbackURL)
+		}
 		jiraResolver := resolver.NewDefaultJiraClientResolver(
 			state.UserTokenStore,
 			cfg.JiraClientID,
 			cfg.JiraClientSecret,
-			cfg.GlobalCloudID,
+			cfg.CloudID,
 			cfg.UserAuthCallbackURL,
 			log.Default(),
 		)

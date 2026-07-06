@@ -88,7 +88,7 @@ JIRA_BOT_JIRA_CLIENT_SECRET=your-atlassian-client-secret
 
 # Per-user token configuration (required)
 JIRA_BOT_USER_AUTH_CALLBACK_URL=https://<your-bot-host>
-JIRA_BOT_GLOBAL_CLOUD_ID=your-atlassian-cloud-id
+JIRA_BOT_CLOUD_ID=your-atlassian-cloud-id
 
 # Jira defaults (required)
 JIRA_BOT_JIRA_DEFAULT_PROJECT=ENG
@@ -101,6 +101,8 @@ JIRA_BOT_REFRESH_CHECK_INTERVAL=30s
 
 ### 6. Deploy with Helm
 
+Using `--set` flags:
+
 ```bash
 helm install jira-bot charts/jira-bot \
   --set secrets.github.webhookSecret="your-webhook-secret" \
@@ -109,11 +111,37 @@ helm install jira-bot charts/jira-bot \
   --set secrets.jira.clientID="your-atlassian-client-id" \
   --set secrets.jira.clientSecret="your-atlassian-client-secret" \
   --set config.githubAppID="123456" \
-  --set config.globalCloudID="your-cloud-id" \
+  --set config.jira.cloudID="your-cloud-id" \
   --set config.jira.defaultProject="ENG" \
   --set config.jira.defaultIssueType="Task" \
-  --set perUserTokens.callbackURL="https://jira-bot.example.com"
+  --set config.callbackURL="https://jira-bot.example.com"
 ```
+
+Or using a values file (`values-production.yaml`):
+
+```yaml
+replicaCount: 2
+
+config:
+  githubAppID: "123456"
+  callbackURL: https://jira-bot.example.com
+  jira:
+    cloudID: your-atlassian-cloud-id
+    defaultProject: ENG
+    defaultIssueType: Task
+    defaultAssign: true
+
+secrets:
+  github:
+    webhookSecret: your-webhook-secret
+    privateKeyBase64: base64-encoded-private-key
+    appClientSecret: your-github-app-client-secret
+  jira:
+    clientID: your-atlassian-client-id
+    clientSecret: your-atlassian-client-secret
+```
+
+> **Note:** `config.jira.cloudID` is the Atlassian Cloud ID that identifies your Jira site. You can find it at `https://your-site.atlassian.net/_edge/tenant_info`.
 
 ## Environment Variables
 
@@ -128,7 +156,7 @@ helm install jira-bot charts/jira-bot \
 | `JIRA_BOT_JIRA_DEFAULT_PROJECT` | Yes | — | Default Jira project key |
 | `JIRA_BOT_JIRA_DEFAULT_ISSUE_TYPE` | Yes | — | Default Jira issue type |
 | `JIRA_BOT_USER_AUTH_CALLBACK_URL` | Yes | — | Base URL for OAuth callback endpoints |
-| `JIRA_BOT_GLOBAL_CLOUD_ID` | Yes | — | Atlassian Cloud ID for the target Jira site |
+| `JIRA_BOT_CLOUD_ID` | Yes | — | Atlassian Cloud ID for the target Jira site |
 | `JIRA_BOT_USER_TOKEN_SECRET_NAME` | No | `jira-bot-user-tokens` | K8s Secret name for per-user token storage |
 | `JIRA_BOT_REFRESH_CHECK_INTERVAL` | No | `30s` | How often the leader checks for tokens needing refresh (min: 10s, max: 300s) |
 | `JIRA_BOT_DEFAULT_ASSIGN` | No | `false` | Auto-assign created issues to the user who triggered the command |
@@ -187,9 +215,21 @@ If RBAC permissions are missing, the bot cannot store or retrieve user tokens an
 
 | Value | Default | Description |
 |-------|---------|-------------|
-| `perUserTokens.secretName` | `{{ fullname }}-user-tokens` | K8s Secret name for per-user tokens |
-| `perUserTokens.callbackURL` | — | Base URL for OAuth callbacks (required) |
-| `perUserTokens.refreshCheckInterval` | `30s` | Token refresh check interval |
+| `config.githubAppID` | — | GitHub App ID (required) |
+| `config.callbackURL` | — | Base URL for OAuth callbacks, e.g. `https://jira-bot.example.com` (required, no trailing slash) |
+| `config.tokenSecretName` | `{{ fullname }}-user-tokens` | K8s Secret name for per-user tokens |
+| `config.refreshCheckInterval` | `30s` | Token refresh check interval |
+| `config.jira.cloudID` | — | Atlassian Cloud ID for the target Jira site (required) |
+| `config.jira.defaultProject` | — | Default Jira project key (required) |
+| `config.jira.defaultIssueType` | — | Default Jira issue type (required) |
+| `config.jira.defaultAssign` | `false` | Auto-assign created issues to the user who triggered the command |
+| `config.listenHTTP` | `:8080` | HTTP listen address |
+| `config.logLevel` | — | Log level override |
+| `secrets.github.webhookSecret` | — | GitHub webhook secret (required) |
+| `secrets.github.privateKeyBase64` | — | GitHub App private key, base64-encoded (required) |
+| `secrets.github.appClientSecret` | — | GitHub App client secret for user-to-server OAuth (required) |
+| `secrets.jira.clientID` | — | Atlassian OAuth 2.0 client ID (required) |
+| `secrets.jira.clientSecret` | — | Atlassian OAuth 2.0 client secret (required) |
 | `leaderElection.leaseName` | `{{ fullname }}-leader` | Leader election lease name |
 | `leaderElection.leaseDuration` | `15s` | Lease duration |
 | `leaderElection.leaseRenewDeadline` | `10s` | Lease renewal deadline |

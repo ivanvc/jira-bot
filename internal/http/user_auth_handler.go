@@ -34,7 +34,7 @@ type userAuthHandler struct {
 	atlClientID           string
 	atlClientSecret       string
 	atlCallbackURL        string
-	globalCloudID         string
+	cloudID               string
 	store                 common.UserTokenStore
 	sessions              *AuthSessionMap
 
@@ -285,10 +285,10 @@ func (h *userAuthHandler) handleAtlassianCallback(w http.ResponseWriter, req *ht
 		return
 	}
 
-	// Use the global Cloud ID
-	cloudID := h.globalCloudID
+	// Use the configured Cloud ID
+	cloudID := h.cloudID
 	if cloudID == "" {
-		renderUserAuthError(w, "Configuration Error", "No global Cloud ID is configured. Please contact the bot administrator.")
+		renderUserAuthError(w, "Configuration Error", "No Cloud ID is configured. Please contact the bot administrator.")
 		return
 	}
 

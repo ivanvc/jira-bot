@@ -57,7 +57,7 @@ spec:
                 fieldRef:
                   fieldPath: metadata.namespace
             - name: JIRA_BOT_USER_TOKEN_SECRET_NAME
-              value: {{ default (printf "%s-user-tokens" (include "jira-bot.fullname" .)) .Values.perUserTokens.secretName | quote }}
+              value: {{ default (printf "%s-user-tokens" (include "jira-bot.fullname" .)) .Values.config.tokenSecretName | quote }}
             - name: JIRA_BOT_TOKEN_LEASE_NAME
               value: {{ default (printf "%s-leader" (include "jira-bot.fullname" .)) .Values.leaderElection.leaseName | quote }}
             {{- if .Values.leaderElection.leaseDuration }}
