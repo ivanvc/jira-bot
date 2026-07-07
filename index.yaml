@@ -2,6 +2,16 @@ apiVersion: v1
 entries:
   jira-bot:
   - apiVersion: v2
+    appVersion: 0.8.2
+    created: "2026-07-07T00:16:23.240014684Z"
+    description: A GitHub bot that creates Jira issues based from GitHub issues/PRs.
+    digest: ca2e5b98cda71689c12a19aba3a0019038352618555d9475514488f161cae83d
+    name: jira-bot
+    type: application
+    urls:
+    - https://github.com/ivanvc/jira-bot/releases/download/0.8.2/jira-bot-0.8.2.tgz
+    version: 0.8.2
+  - apiVersion: v2
     appVersion: 0.8.1
     created: "2026-07-06T23:39:42.761684578Z"
     description: A GitHub bot that creates Jira issues based from GitHub issues/PRs.
@@ -171,4 +181,4 @@ entries:
     urls:
     - https://github.com/ivanvc/jira-bot/releases/download/0.1.0/jira-bot-0.1.0.tgz
     version: 0.1.0
-generated: "2026-07-06T23:39:42.761827334Z"
+generated: "2026-07-07T00:16:23.240131448Z"
