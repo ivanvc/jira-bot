@@ -31,7 +31,7 @@ func BuildMux(state *common.State) *http.ServeMux {
 			atlCallbackURL:        state.Config.UserAuthCallbackURL + "/oauth/atlassian/callback",
 			cloudID:               state.Config.CloudID,
 			store:                 state.UserTokenStore,
-			sessions:              NewAuthSessionMap(authSessionTTL),
+			cookieSecret:          state.Config.GitHubAppClientSecret,
 		}
 		mux.HandleFunc("/oauth/authorize", handler.handleAuthorize)
 		mux.HandleFunc("/oauth/github/callback", handler.handleGitHubCallback)

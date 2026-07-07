@@ -3,6 +3,8 @@ package http
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,6 +15,9 @@ import (
 	"github.com/charmbracelet/log"
 	"github.com/ivanvc/jira-bot/internal/common"
 )
+
+// randRead is a variable for testing (allows deterministic state generation in tests).
+var randRead = rand.Read
 
 const (
 	userAuthSessionCookie = "jira_user_auth_session"
@@ -36,7 +41,7 @@ type userAuthHandler struct {
 	atlCallbackURL        string
 	cloudID               string
 	store                 common.UserTokenStore
-	sessions              *AuthSessionMap
+	cookieSecret          string // HMAC secret for signed cookies (uses githubAppClientSecret)
 
 	// URL overrides for testing (empty means use package-level constants)
 	githubAuthorizeURL  string
@@ -128,32 +133,25 @@ func (h *userAuthHandler) fetchAtlassianAccountID(ctx context.Context, accessTok
 }
 
 // handleAuthorize initiates the GitHub OAuth flow by redirecting the user to
-// GitHub's authorization endpoint. It creates a session and uses the session ID
-// as the OAuth state parameter.
+// GitHub's authorization endpoint. It uses a random state parameter for CSRF protection.
 // Endpoint: GET /oauth/authorize
 func (h *userAuthHandler) handleAuthorize(w http.ResponseWriter, req *http.Request) {
-	// Create a placeholder session (login will be filled in after GitHub callback)
-	sessionID, err := h.sessions.Create("")
-	if err != nil {
-		log.Error("Failed to create auth session", "error", err)
+	// Generate a random state for CSRF protection
+	b := make([]byte, 32)
+	if _, err := randRead(b); err != nil {
+		log.Error("Failed to generate state", "error", err)
 		renderUserAuthError(w, "Internal Error", "Failed to initiate authorization flow. Please try again.")
 		return
 	}
+	state := hex.EncodeToString(b)
 
-	// Set session cookie
-	http.SetCookie(w, &http.Cookie{
-		Name:     userAuthSessionCookie,
-		Value:    sessionID,
-		Path:     "/oauth/",
-		HttpOnly: true,
-		Secure:   true,
-		SameSite: http.SameSiteStrictMode,
-	})
+	// Store the state in a signed cookie so we can verify it in the callback
+	setSignedCookie(w, userAuthSessionCookie, state, "/oauth/", h.cookieSecret)
 
 	// Redirect to GitHub OAuth
 	params := url.Values{
 		"client_id": {h.githubAppClientID},
-		"state":     {sessionID},
+		"state":     {state},
 	}
 	redirectURL := h.getGitHubAuthorizeURL() + "?" + params.Encode()
 	http.Redirect(w, req, redirectURL, http.StatusFound)
@@ -161,7 +159,7 @@ func (h *userAuthHandler) handleAuthorize(w http.ResponseWriter, req *http.Reque
 
 // handleGitHubCallback handles the GitHub OAuth callback. It exchanges the
 // authorization code for a user access token, fetches the user's GitHub login,
-// stores it in the session, and redirects to Atlassian OAuth consent.
+// stores it in a signed cookie, and redirects to Atlassian OAuth consent.
 // Endpoint: GET /oauth/github/callback
 func (h *userAuthHandler) handleGitHubCallback(w http.ResponseWriter, req *http.Request) {
 	code := req.URL.Query().Get("code")
@@ -183,6 +181,13 @@ func (h *userAuthHandler) handleGitHubCallback(w http.ResponseWriter, req *http.
 		return
 	}
 
+	// Verify the state matches the signed cookie (CSRF protection)
+	savedState, err := getSignedCookie(req, userAuthSessionCookie, h.cookieSecret, authSessionTTL)
+	if err != nil || savedState != stateParam {
+		renderUserAuthError(w, "Invalid State", "The state parameter does not match. Please restart the authorization flow.")
+		return
+	}
+
 	// Exchange code for GitHub user access token
 	ghToken, err := h.exchangeGitHubCode(code)
 	if err != nil {
@@ -199,24 +204,8 @@ func (h *userAuthHandler) handleGitHubCallback(w http.ResponseWriter, req *http.
 		return
 	}
 
-	// Delete the old session (placeholder) and create a new one with the login
-	h.sessions.Delete(stateParam)
-	sessionID, err := h.sessions.Create(login)
-	if err != nil {
-		log.Error("Failed to create session with login", "error", err)
-		renderUserAuthError(w, "Internal Error", "Failed to save session. Please try again.")
-		return
-	}
-
-	// Set updated session cookie
-	http.SetCookie(w, &http.Cookie{
-		Name:     userAuthSessionCookie,
-		Value:    sessionID,
-		Path:     "/oauth/",
-		HttpOnly: true,
-		Secure:   true,
-		SameSite: http.SameSiteStrictMode,
-	})
+	// Store the login in a signed cookie (any pod can read this)
+	setSignedCookie(w, userAuthSessionCookie, login, "/oauth/", h.cookieSecret)
 
 	// Redirect to Atlassian OAuth consent
 	params := url.Values{
@@ -224,7 +213,7 @@ func (h *userAuthHandler) handleGitHubCallback(w http.ResponseWriter, req *http.
 		"client_id":     {h.atlClientID},
 		"scope":         {"offline_access read:jira-work write:jira-work"},
 		"redirect_uri":  {h.atlCallbackURL},
-		"state":         {sessionID},
+		"state":         {login}, // state is just for logging/debugging; not security-critical here
 		"response_type": {"code"},
 		"prompt":        {"consent"},
 	}
@@ -233,8 +222,8 @@ func (h *userAuthHandler) handleGitHubCallback(w http.ResponseWriter, req *http.
 }
 
 // handleAtlassianCallback handles the Atlassian OAuth callback. It resolves the
-// user login from the session cookie, exchanges the code for Atlassian tokens,
-// uses the global Cloud ID, and writes the token entry to the store.
+// user login from the signed cookie, exchanges the code for Atlassian tokens,
+// uses the configured Cloud ID, and writes the token entry to the store.
 // Endpoint: GET /oauth/atlassian/callback
 func (h *userAuthHandler) handleAtlassianCallback(w http.ResponseWriter, req *http.Request) {
 	code := req.URL.Query().Get("code")
@@ -250,20 +239,10 @@ func (h *userAuthHandler) handleAtlassianCallback(w http.ResponseWriter, req *ht
 		return
 	}
 
-	// Resolve login from session cookie
-	cookie, err := req.Cookie(userAuthSessionCookie)
-	if err != nil || cookie.Value == "" {
-		renderUserAuthError(w, "Session Expired", "Your authorization session is missing or expired. Please restart the authorization flow.")
-		return
-	}
-
-	login, err := h.sessions.Get(cookie.Value)
+	// Resolve login from signed cookie
+	login, err := getSignedCookie(req, userAuthSessionCookie, h.cookieSecret, authSessionTTL)
 	if err != nil {
-		if err == ErrSessionExpired {
-			renderUserAuthError(w, "Session Expired", "Your authorization session has expired. Please restart the authorization flow.")
-		} else {
-			renderUserAuthError(w, "Invalid Session", "Your authorization session is invalid. Please restart the authorization flow.")
-		}
+		renderUserAuthError(w, "Session Expired", "Your authorization session is missing or expired. Please restart the authorization flow.")
 		return
 	}
 
@@ -313,9 +292,6 @@ func (h *userAuthHandler) handleAtlassianCallback(w http.ResponseWriter, req *ht
 		return
 	}
 
-	// Clean up session
-	h.sessions.Delete(cookie.Value)
-
 	// Clear the session cookie
 	http.SetCookie(w, &http.Cookie{
 		Name:     userAuthSessionCookie,
@@ -323,7 +299,7 @@ func (h *userAuthHandler) handleAtlassianCallback(w http.ResponseWriter, req *ht
 		Path:     "/oauth/",
 		HttpOnly: true,
 		Secure:   true,
-		SameSite: http.SameSiteStrictMode,
+		SameSite: http.SameSiteLaxMode,
 		MaxAge:   -1,
 	})
 
