@@ -1182,7 +1182,7 @@ func TestCreateJiraIssue_AuthRequired_PostsAuthLink(t *testing.T) {
 	resolver := &FlexibleMockResolver{
 		Result: common.JiraClientResolveResult{
 			AuthRequired: true,
-			AuthLink:     "https://bot.example.com/oauth/user/authorize?login=octocat",
+			AuthLink:     "https://bot.example.com/oauth/authorize?login=octocat",
 		},
 	}
 	state := &common.State{
@@ -1217,7 +1217,7 @@ func TestCreateJiraIssue_AuthRequired_PostsAuthLink(t *testing.T) {
 	for _, call := range gh.Calls {
 		if call.Method == "PostComment" {
 			body := call.Args[3].(string)
-			if strings.Contains(body, "authorize") && strings.Contains(body, "https://bot.example.com/oauth/user/authorize?login=octocat") {
+			if strings.Contains(body, "authorize") && strings.Contains(body, "https://bot.example.com/oauth/authorize?login=octocat") {
 				authCommentFound = true
 				break
 			}
@@ -1295,7 +1295,7 @@ func TestCreateJiraIssue_401Error_MarksInvalidAndPostsReauthLink(t *testing.T) {
 		firstResult: common.JiraClientResolveResult{Client: jira},
 		secondResult: common.JiraClientResolveResult{
 			AuthRequired: true,
-			AuthLink:     "https://bot.example.com/oauth/user/authorize?login=octocat",
+			AuthLink:     "https://bot.example.com/oauth/authorize?login=octocat",
 		},
 		callCount: &callCount,
 	}

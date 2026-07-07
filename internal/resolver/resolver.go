@@ -212,7 +212,7 @@ func (r *DefaultJiraClientResolver) authRequiredResult(login string) common.Jira
 	if r.callbackBaseURL == "" {
 		r.logger.Warn("JIRA_BOT_USER_AUTH_CALLBACK_URL is empty — auth link will be a relative URL that won't work on GitHub")
 	}
-	authLink := fmt.Sprintf("%s/oauth/user/authorize?login=%s", r.callbackBaseURL, login)
+	authLink := fmt.Sprintf("%s/oauth/authorize?login=%s", r.callbackBaseURL, login)
 	return common.JiraClientResolveResult{
 		AuthRequired: true,
 		AuthLink:     authLink,

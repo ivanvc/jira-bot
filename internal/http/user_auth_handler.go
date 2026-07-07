@@ -130,7 +130,7 @@ func (h *userAuthHandler) fetchAtlassianAccountID(ctx context.Context, accessTok
 // handleAuthorize initiates the GitHub OAuth flow by redirecting the user to
 // GitHub's authorization endpoint. It creates a session and uses the session ID
 // as the OAuth state parameter.
-// Endpoint: GET /oauth/user/authorize
+// Endpoint: GET /oauth/authorize
 func (h *userAuthHandler) handleAuthorize(w http.ResponseWriter, req *http.Request) {
 	// Create a placeholder session (login will be filled in after GitHub callback)
 	sessionID, err := h.sessions.Create("")
@@ -144,7 +144,7 @@ func (h *userAuthHandler) handleAuthorize(w http.ResponseWriter, req *http.Reque
 	http.SetCookie(w, &http.Cookie{
 		Name:     userAuthSessionCookie,
 		Value:    sessionID,
-		Path:     "/oauth/user/",
+		Path:     "/oauth/",
 		HttpOnly: true,
 		Secure:   true,
 		SameSite: http.SameSiteStrictMode,
@@ -162,7 +162,7 @@ func (h *userAuthHandler) handleAuthorize(w http.ResponseWriter, req *http.Reque
 // handleGitHubCallback handles the GitHub OAuth callback. It exchanges the
 // authorization code for a user access token, fetches the user's GitHub login,
 // stores it in the session, and redirects to Atlassian OAuth consent.
-// Endpoint: GET /oauth/user/github/callback
+// Endpoint: GET /oauth/github/callback
 func (h *userAuthHandler) handleGitHubCallback(w http.ResponseWriter, req *http.Request) {
 	code := req.URL.Query().Get("code")
 	if code == "" {
@@ -212,7 +212,7 @@ func (h *userAuthHandler) handleGitHubCallback(w http.ResponseWriter, req *http.
 	http.SetCookie(w, &http.Cookie{
 		Name:     userAuthSessionCookie,
 		Value:    sessionID,
-		Path:     "/oauth/user/",
+		Path:     "/oauth/",
 		HttpOnly: true,
 		Secure:   true,
 		SameSite: http.SameSiteStrictMode,
@@ -235,7 +235,7 @@ func (h *userAuthHandler) handleGitHubCallback(w http.ResponseWriter, req *http.
 // handleAtlassianCallback handles the Atlassian OAuth callback. It resolves the
 // user login from the session cookie, exchanges the code for Atlassian tokens,
 // uses the global Cloud ID, and writes the token entry to the store.
-// Endpoint: GET /oauth/user/atlassian/callback
+// Endpoint: GET /oauth/atlassian/callback
 func (h *userAuthHandler) handleAtlassianCallback(w http.ResponseWriter, req *http.Request) {
 	code := req.URL.Query().Get("code")
 	if code == "" {
@@ -320,7 +320,7 @@ func (h *userAuthHandler) handleAtlassianCallback(w http.ResponseWriter, req *ht
 	http.SetCookie(w, &http.Cookie{
 		Name:     userAuthSessionCookie,
 		Value:    "",
-		Path:     "/oauth/user/",
+		Path:     "/oauth/",
 		HttpOnly: true,
 		Secure:   true,
 		SameSite: http.SameSiteStrictMode,

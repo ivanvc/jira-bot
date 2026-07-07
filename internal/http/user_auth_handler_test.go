@@ -59,14 +59,14 @@ func newTestAuthHandler(store *mockUserTokenStore, sessions *AuthSessionMap) *us
 		githubAppClientSecret: "test-github-client-secret",
 		atlClientID:           "test-atl-client-id",
 		atlClientSecret:       "test-atl-client-secret",
-		atlCallbackURL:        "http://localhost:8080/oauth/user/atlassian/callback",
+		atlCallbackURL:        "http://localhost:8080/oauth/atlassian/callback",
 		cloudID:               "test-cloud-id-abc123",
 		store:                 store,
 		sessions:              sessions,
 	}
 }
 
-// TestHandleAuthorize_RedirectsToGitHub verifies that the /oauth/user/authorize
+// TestHandleAuthorize_RedirectsToGitHub verifies that the /oauth/authorize
 // endpoint redirects to GitHub OAuth with the correct client_id and state.
 // Validates: Requirement 2.3
 func TestHandleAuthorize_RedirectsToGitHub(t *testing.T) {
@@ -74,7 +74,7 @@ func TestHandleAuthorize_RedirectsToGitHub(t *testing.T) {
 	sessions := NewAuthSessionMap(10 * time.Minute)
 	handler := newTestAuthHandler(store, sessions)
 
-	req := httptest.NewRequest(http.MethodGet, "/oauth/user/authorize", nil)
+	req := httptest.NewRequest(http.MethodGet, "/oauth/authorize", nil)
 	rec := httptest.NewRecorder()
 
 	handler.handleAuthorize(rec, req)
@@ -159,7 +159,7 @@ func TestHandleGitHubCallback_ExchangesCodeAndRedirectsToAtlassian(t *testing.T)
 	sessionID, err := sessions.Create("")
 	require.NoError(t, err)
 
-	reqURL := fmt.Sprintf("/oauth/user/github/callback?code=test-auth-code&state=%s", sessionID)
+	reqURL := fmt.Sprintf("/oauth/github/callback?code=test-auth-code&state=%s", sessionID)
 	req := httptest.NewRequest(http.MethodGet, reqURL, nil)
 	rec := httptest.NewRecorder()
 
@@ -189,7 +189,7 @@ func TestHandleGitHubCallback_ExchangesCodeAndRedirectsToAtlassian(t *testing.T)
 	assert.Contains(t, q.Get("scope"), "offline_access")
 	assert.Equal(t, "code", q.Get("response_type"))
 	assert.Equal(t, "consent", q.Get("prompt"))
-	assert.Equal(t, "http://localhost:8080/oauth/user/atlassian/callback", q.Get("redirect_uri"))
+	assert.Equal(t, "http://localhost:8080/oauth/atlassian/callback", q.Get("redirect_uri"))
 
 	// Verify the new session contains the "octocat" login
 	newSessionID := q.Get("state")
@@ -215,7 +215,7 @@ func TestHandleAtlassianCallback_ExchangesCodeAndStoresToken(t *testing.T) {
 		assert.Equal(t, "test-atl-client-id", payload["client_id"])
 		assert.Equal(t, "test-atl-client-secret", payload["client_secret"])
 		assert.Equal(t, "test-auth-code", payload["code"])
-		assert.Equal(t, "http://localhost:8080/oauth/user/atlassian/callback", payload["redirect_uri"])
+		assert.Equal(t, "http://localhost:8080/oauth/atlassian/callback", payload["redirect_uri"])
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
@@ -238,7 +238,7 @@ func TestHandleAtlassianCallback_ExchangesCodeAndStoresToken(t *testing.T) {
 	handler.atlassianTokenURL = atlTokenServer.URL
 
 	// Build request with code and session cookie
-	req := httptest.NewRequest(http.MethodGet, "/oauth/user/atlassian/callback?code=test-auth-code", nil)
+	req := httptest.NewRequest(http.MethodGet, "/oauth/atlassian/callback?code=test-auth-code", nil)
 	req.AddCookie(&http.Cookie{
 		Name:  userAuthSessionCookie,
 		Value: sessionID,
@@ -285,7 +285,7 @@ func TestHandleAtlassianCallback_ExpiredSession(t *testing.T) {
 	// Wait for the session to expire
 	time.Sleep(2 * time.Millisecond)
 
-	req := httptest.NewRequest(http.MethodGet, "/oauth/user/atlassian/callback?code=test-code", nil)
+	req := httptest.NewRequest(http.MethodGet, "/oauth/atlassian/callback?code=test-code", nil)
 	req.AddCookie(&http.Cookie{
 		Name:  userAuthSessionCookie,
 		Value: sessionID,
@@ -315,7 +315,7 @@ func TestHandleAtlassianCallback_MissingCode(t *testing.T) {
 	require.NoError(t, err)
 
 	// Request without code parameter
-	req := httptest.NewRequest(http.MethodGet, "/oauth/user/atlassian/callback", nil)
+	req := httptest.NewRequest(http.MethodGet, "/oauth/atlassian/callback", nil)
 	req.AddCookie(&http.Cookie{
 		Name:  userAuthSessionCookie,
 		Value: sessionID,
@@ -353,7 +353,7 @@ func TestHandleGitHubCallback_ExchangeFailure(t *testing.T) {
 	sessionID, err := sessions.Create("")
 	require.NoError(t, err)
 
-	reqURL := fmt.Sprintf("/oauth/user/github/callback?code=bad-code&state=%s", sessionID)
+	reqURL := fmt.Sprintf("/oauth/github/callback?code=bad-code&state=%s", sessionID)
 	req := httptest.NewRequest(http.MethodGet, reqURL, nil)
 	rec := httptest.NewRecorder()
 
@@ -378,7 +378,7 @@ func TestHandleAtlassianCallback_MissingSessionCookie(t *testing.T) {
 	handler := newTestAuthHandler(store, sessions)
 
 	// Request with code but no session cookie
-	req := httptest.NewRequest(http.MethodGet, "/oauth/user/atlassian/callback?code=test-code", nil)
+	req := httptest.NewRequest(http.MethodGet, "/oauth/atlassian/callback?code=test-code", nil)
 	rec := httptest.NewRecorder()
 
 	handler.handleAtlassianCallback(rec, req)
@@ -426,7 +426,7 @@ func TestHandleAtlassianCallback_UsesCloudID(t *testing.T) {
 	handler.atlassianTokenURL = atlTokenServer.URL
 	handler.cloudID = "specific-cloud-id-999"
 
-	req := httptest.NewRequest(http.MethodGet, "/oauth/user/atlassian/callback?code=xyz", nil)
+	req := httptest.NewRequest(http.MethodGet, "/oauth/atlassian/callback?code=xyz", nil)
 	req.AddCookie(&http.Cookie{
 		Name:  userAuthSessionCookie,
 		Value: sessionID,
@@ -466,7 +466,7 @@ func TestHandleAtlassianCallback_EmptyCloudID(t *testing.T) {
 	handler.atlassianTokenURL = atlTokenServer.URL
 	handler.cloudID = "" // no cloud ID configured
 
-	req := httptest.NewRequest(http.MethodGet, "/oauth/user/atlassian/callback?code=xyz", nil)
+	req := httptest.NewRequest(http.MethodGet, "/oauth/atlassian/callback?code=xyz", nil)
 	req.AddCookie(&http.Cookie{
 		Name:  userAuthSessionCookie,
 		Value: sessionID,
@@ -524,7 +524,7 @@ func TestFetchAtlassianAccountID_Success(t *testing.T) {
 	// The myselfURL uses %s as a format placeholder for cloudID; override with test server
 	handler.atlassianMyselfURL_ = myselfServer.URL + "/%s/rest/api/3/myself"
 
-	req := httptest.NewRequest(http.MethodGet, "/oauth/user/atlassian/callback?code=test-code", nil)
+	req := httptest.NewRequest(http.MethodGet, "/oauth/atlassian/callback?code=test-code", nil)
 	req.AddCookie(&http.Cookie{
 		Name:  userAuthSessionCookie,
 		Value: sessionID,
@@ -579,7 +579,7 @@ func TestFetchAtlassianAccountID_Non200_CompletesWithoutError(t *testing.T) {
 	handler.atlassianTokenURL = atlTokenServer.URL
 	handler.atlassianMyselfURL_ = myselfServer.URL + "/%s/rest/api/3/myself"
 
-	req := httptest.NewRequest(http.MethodGet, "/oauth/user/atlassian/callback?code=test-code", nil)
+	req := httptest.NewRequest(http.MethodGet, "/oauth/atlassian/callback?code=test-code", nil)
 	req.AddCookie(&http.Cookie{
 		Name:  userAuthSessionCookie,
 		Value: sessionID,
@@ -638,7 +638,7 @@ func TestFetchAtlassianAccountID_InvalidJSON_CompletesWithoutError(t *testing.T)
 	handler.atlassianTokenURL = atlTokenServer.URL
 	handler.atlassianMyselfURL_ = myselfServer.URL + "/%s/rest/api/3/myself"
 
-	req := httptest.NewRequest(http.MethodGet, "/oauth/user/atlassian/callback?code=test-code", nil)
+	req := httptest.NewRequest(http.MethodGet, "/oauth/atlassian/callback?code=test-code", nil)
 	req.AddCookie(&http.Cookie{
 		Name:  userAuthSessionCookie,
 		Value: sessionID,

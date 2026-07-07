@@ -28,14 +28,14 @@ func BuildMux(state *common.State) *http.ServeMux {
 			githubAppClientSecret: state.Config.GitHubAppClientSecret,
 			atlClientID:           state.Config.JiraClientID,
 			atlClientSecret:       state.Config.JiraClientSecret,
-			atlCallbackURL:        state.Config.UserAuthCallbackURL,
+			atlCallbackURL:        state.Config.UserAuthCallbackURL + "/oauth/atlassian/callback",
 			cloudID:               state.Config.CloudID,
 			store:                 state.UserTokenStore,
 			sessions:              NewAuthSessionMap(authSessionTTL),
 		}
-		mux.HandleFunc("/oauth/user/authorize", handler.handleAuthorize)
-		mux.HandleFunc("/oauth/user/github/callback", handler.handleGitHubCallback)
-		mux.HandleFunc("/oauth/user/atlassian/callback", handler.handleAtlassianCallback)
+		mux.HandleFunc("/oauth/authorize", handler.handleAuthorize)
+		mux.HandleFunc("/oauth/github/callback", handler.handleGitHubCallback)
+		mux.HandleFunc("/oauth/atlassian/callback", handler.handleAtlassianCallback)
 	}
 
 	// Status root handler
@@ -49,7 +49,7 @@ func BuildMux(state *common.State) *http.ServeMux {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	log.Info("Built mux", "routes", []string{"/webhooks/github/payload", "/oauth/user/authorize", "/oauth/user/github/callback", "/oauth/user/atlassian/callback", "/", "/healthz", "/readyz"})
+	log.Info("Built mux", "routes", []string{"/webhooks/github/payload", "/oauth/authorize", "/oauth/github/callback", "/oauth/atlassian/callback", "/", "/healthz", "/readyz"})
 	return mux
 }
 
