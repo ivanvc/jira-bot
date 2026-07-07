@@ -172,6 +172,8 @@ secrets:
 | `JIRA_BOT_TOKEN_LEASE_NAME` | No | — | K8s Lease name for leader election |
 | `JIRA_BOT_LEASE_DURATION` | No | `15s` | Leader election lease duration |
 | `JIRA_BOT_LEASE_RENEW_DEADLINE` | No | `10s` | Leader election lease renewal deadline |
+| `JIRA_BOT_GITHUB_REDIRECT_BASE_URL` | No | `https://github.com` | Base URL prepended to stored path for post-OAuth redirect (set for GitHub Enterprise) |
+| `JIRA_BOT_GITHUB_REDIRECT_DELAY_SECONDS` | No | `3` | Seconds before auto-redirect on success page after OAuth completion |
 
 ## Per-User Authorization Flow
 
@@ -232,6 +234,8 @@ If RBAC permissions are missing, the bot cannot store or retrieve user tokens an
 | `config.jira.defaultAssign` | `false` | Auto-assign created issues to the user who triggered the command |
 | `config.listenHTTP` | `:8080` | HTTP listen address |
 | `config.logLevel` | — | Log level override |
+| `config.github.redirect.baseURL` | `https://github.com` | Base URL for post-OAuth redirect (set for GitHub Enterprise) |
+| `config.github.redirect.delaySecs` | `3` | Seconds before auto-redirect on success page |
 | `secrets.github.webhookSecret` | — | GitHub webhook secret (required) |
 | `secrets.github.privateKeyBase64` | — | GitHub App private key, base64-encoded (required) |
 | `secrets.github.appClientSecret` | — | GitHub App client secret for user-to-server OAuth (required) |

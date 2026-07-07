@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"sort"
 	"strings"
 
@@ -11,6 +12,19 @@ import (
 	"github.com/ivanvc/jira-bot/internal/adapters/github"
 	"github.com/ivanvc/jira-bot/internal/common"
 )
+
+// extractPath extracts only the path component from a URL string.
+// Returns empty string if the URL is empty or parsing fails.
+func extractPath(rawURL string) string {
+	if rawURL == "" {
+		return ""
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
+	}
+	return u.Path
+}
 
 const errorAlreadyCreated = `:warning: Uh-oh, a Jira issue for this issue seems to have been already created by me :crying_cat_face:`
 
@@ -309,7 +323,11 @@ func resolveJiraClient(ctx context.Context, state *common.State, issueComment *g
 	result := state.JiraClientResolver.Resolve(ctx, login)
 
 	if result.AuthRequired {
-		authMsg := fmt.Sprintf(":lock: You need to authorize the bot with your Jira account before creating issues. Please [authorize here](%s) and try again.", result.AuthLink)
+		authLink := result.AuthLink
+		if path := extractPath(issueComment.Issue.HTMLURL); path != "" {
+			authLink = authLink + "?return_to=" + url.QueryEscape(path)
+		}
+		authMsg := fmt.Sprintf(":lock: You need to authorize the bot with your Jira account before creating issues. Please [authorize here](%s) and try again.", authLink)
 		if err := state.GitHubClient.PostComment(ctx, issueComment.Installation.ID, issueComment, authMsg); err != nil {
 			return nil, err
 		}

@@ -1883,3 +1883,145 @@ func TestTokenizeLine(t *testing.T) {
 		})
 	}
 }
+
+
+// --- extractPath unit tests ---
+
+func TestExtractPath_EmptyString(t *testing.T) {
+	result := extractPath("")
+	assert.Equal(t, "", result)
+}
+
+func TestExtractPath_ValidHTTPSURL(t *testing.T) {
+	result := extractPath("https://github.com/org/repo/issues/42")
+	assert.Equal(t, "/org/repo/issues/42", result)
+}
+
+func TestExtractPath_ValidHTTPURL(t *testing.T) {
+	result := extractPath("http://github.com/org/repo/pull/7")
+	assert.Equal(t, "/org/repo/pull/7", result)
+}
+
+func TestExtractPath_URLWithQueryAndFragment(t *testing.T) {
+	result := extractPath("https://github.com/org/repo/issues/42?foo=bar#comment")
+	assert.Equal(t, "/org/repo/issues/42", result)
+}
+
+func TestExtractPath_PathOnly(t *testing.T) {
+	result := extractPath("/org/repo/issues/42")
+	assert.Equal(t, "/org/repo/issues/42", result)
+}
+
+func TestExtractPath_URLWithPort(t *testing.T) {
+	result := extractPath("https://github.example.com:8443/org/repo/issues/1")
+	assert.Equal(t, "/org/repo/issues/1", result)
+}
+
+// --- 2.4 Auth link construction tests (return_to parameter) ---
+
+func TestResolveJiraClient_EmptyHTMLURL_NoReturnToAppended(t *testing.T) {
+	// Validates: Requirements 1.1, 1.2
+	// When issueComment.Issue.HTMLURL is empty, the auth link should have no return_to parameter.
+	gh := &MockGitHubClient{}
+	resolver := &FlexibleMockResolver{
+		Result: common.JiraClientResolveResult{
+			AuthRequired: true,
+			AuthLink:     "https://bot.example.com/oauth/authorize",
+		},
+	}
+	state := &common.State{
+		Config: common.Config{
+			JiraDefaultProject:   "DEFAULT",
+			JiraDefaultIssueType: "Task",
+		},
+		GitHubClient:       gh,
+		JiraClientResolver: resolver,
+	}
+
+	ic := &github.IssueComment{
+		Action: "created",
+		Issue: github.Issue{
+			Title:   "Test Issue",
+			Body:    "Issue body",
+			HTMLURL: "", // empty HTMLURL
+		},
+		Comment: github.Comment{
+			Body: "/jira create",
+			User: github.CommentUser{Login: "octocat"},
+		},
+		Installation: github.Installation{ID: 42},
+	}
+
+	err := Run(context.Background(), state, ic)
+
+	require.NoError(t, err)
+	// Find the PostComment call with the auth link
+	var authBody string
+	for _, call := range gh.Calls {
+		if call.Method == "PostComment" {
+			body := call.Args[3].(string)
+			if strings.Contains(body, "authorize") {
+				authBody = body
+				break
+			}
+		}
+	}
+	require.NotEmpty(t, authBody, "Expected a PostComment call with auth link")
+	// Auth link should NOT contain return_to
+	assert.NotContains(t, authBody, "return_to")
+	// Auth link should be the bare URL without query params
+	assert.Contains(t, authBody, "https://bot.example.com/oauth/authorize)")
+}
+
+func TestResolveJiraClient_ValidHTMLURL_ReturnToAppended(t *testing.T) {
+	// Validates: Requirements 1.1, 1.2
+	// When issueComment.Issue.HTMLURL is a valid URL, the auth link should have
+	// ?return_to= with the percent-encoded path appended.
+	gh := &MockGitHubClient{}
+	resolver := &FlexibleMockResolver{
+		Result: common.JiraClientResolveResult{
+			AuthRequired: true,
+			AuthLink:     "https://bot.example.com/oauth/authorize",
+		},
+	}
+	state := &common.State{
+		Config: common.Config{
+			JiraDefaultProject:   "DEFAULT",
+			JiraDefaultIssueType: "Task",
+		},
+		GitHubClient:       gh,
+		JiraClientResolver: resolver,
+	}
+
+	ic := &github.IssueComment{
+		Action: "created",
+		Issue: github.Issue{
+			Title:   "Test Issue",
+			Body:    "Issue body",
+			HTMLURL: "https://github.com/org/repo/issues/42",
+		},
+		Comment: github.Comment{
+			Body: "/jira create",
+			User: github.CommentUser{Login: "octocat"},
+		},
+		Installation: github.Installation{ID: 42},
+	}
+
+	err := Run(context.Background(), state, ic)
+
+	require.NoError(t, err)
+	// Find the PostComment call with the auth link
+	var authBody string
+	for _, call := range gh.Calls {
+		if call.Method == "PostComment" {
+			body := call.Args[3].(string)
+			if strings.Contains(body, "authorize") {
+				authBody = body
+				break
+			}
+		}
+	}
+	require.NotEmpty(t, authBody, "Expected a PostComment call with auth link")
+	// Auth link should contain the return_to parameter with percent-encoded path
+	assert.Contains(t, authBody, "?return_to=%2Forg%2Frepo%2Fissues%2F42")
+}

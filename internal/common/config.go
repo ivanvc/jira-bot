@@ -45,6 +45,12 @@ type Config struct {
 
 	// Auto-assign: whether to set the assignee field when creating issues
 	JiraDefaultAssign bool // JIRA_BOT_DEFAULT_ASSIGN, default false
+
+	// GitHub redirect base URL prepended to stored path for post-OAuth redirect
+	GitHubRedirectBaseURL string // JIRA_BOT_GITHUB_REDIRECT_BASE_URL, default "https://github.com"
+
+	// Redirect delay in seconds on the success page before auto-redirecting
+	RedirectDelaySec int // JIRA_BOT_GITHUB_REDIRECT_DELAY_SECONDS, default 3
 }
 
 func LoadConfig() Config {
@@ -83,6 +89,12 @@ func LoadConfig() Config {
 
 	// Auto-assign default
 	cfg.JiraDefaultAssign = loadEnvBool("JIRA_BOT_DEFAULT_ASSIGN", false)
+
+	// GitHub redirect base URL
+	cfg.GitHubRedirectBaseURL = loadEnvWithDefault("JIRA_BOT_GITHUB_REDIRECT_BASE_URL", "https://github.com")
+
+	// Redirect delay
+	cfg.RedirectDelaySec = loadEnvInt("JIRA_BOT_GITHUB_REDIRECT_DELAY_SECONDS", 3)
 
 	return cfg
 }
@@ -139,6 +151,21 @@ func loadEnvDurationClamped(variable string, fallback, min, max time.Duration) t
 		d = max
 	}
 	return d
+}
+
+// loadEnvInt loads an integer from the given environment variable, returning
+// the fallback value if the variable is unset, empty, or not a valid integer.
+func loadEnvInt(variable string, fallback int) int {
+	v, ok := os.LookupEnv(variable)
+	if !ok || v == "" {
+		return fallback
+	}
+	i, err := strconv.Atoi(v)
+	if err != nil {
+		log.Warnf("Environment variable %q has invalid integer value %q, using default %d", variable, v, fallback)
+		return fallback
+	}
+	return i
 }
 
 // loadEnvBool loads a boolean from an environment variable.

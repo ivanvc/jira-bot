@@ -30,6 +30,12 @@ config:
     appID: ""
     # Required: The GitHub App's OAuth Client ID (from the app's settings page, e.g. Iv23liXXXXXX)
     clientID: ""
+    # Post-OAuth redirect settings
+    redirect:
+      # Optional: Base URL prepended to stored path (default: https://github.com, set for GitHub Enterprise)
+      baseURL: ""
+      # Optional: Seconds before auto-redirect on success page (default: 3)
+      delaySecs: ""
   namespace: ""
 
 secrets:

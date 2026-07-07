@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/charmbracelet/log"
@@ -42,6 +43,8 @@ type userAuthHandler struct {
 	cloudID               string
 	store                 common.UserTokenStore
 	cookieSecret          string // HMAC secret for signed cookies (uses githubAppClientSecret)
+	githubRedirectBaseURL string // Base URL prepended to stored path for post-OAuth redirect
+	redirectDelaySec      int    // Seconds before auto-redirect on success page
 
 	// URL overrides for testing (empty means use package-level constants)
 	githubAuthorizeURL  string
@@ -145,8 +148,20 @@ func (h *userAuthHandler) handleAuthorize(w http.ResponseWriter, req *http.Reque
 	}
 	state := hex.EncodeToString(b)
 
-	// Store the state in a signed cookie so we can verify it in the callback
-	setSignedCookie(w, userAuthSessionCookie, state, "/oauth/", h.cookieSecret)
+	// Read optional return_to query parameter
+	returnTo := req.URL.Query().Get("return_to")
+
+	// Store state and return_to in a signed JSON cookie
+	payload := cookiePayload{State: state, ReturnTo: returnTo}
+	signed := signedCookiePayload(payload, h.cookieSecret, time.Now())
+	http.SetCookie(w, &http.Cookie{
+		Name:     userAuthSessionCookie,
+		Value:    signed,
+		Path:     "/oauth/",
+		HttpOnly: true,
+		Secure:   true,
+		SameSite: http.SameSiteLaxMode,
+	})
 
 	// Redirect to GitHub OAuth
 	params := url.Values{
@@ -182,8 +197,13 @@ func (h *userAuthHandler) handleGitHubCallback(w http.ResponseWriter, req *http.
 	}
 
 	// Verify the state matches the signed cookie (CSRF protection)
-	savedState, err := getSignedCookie(req, userAuthSessionCookie, h.cookieSecret, authSessionTTL)
-	if err != nil || savedState != stateParam {
+	cookie, err := req.Cookie(userAuthSessionCookie)
+	if err != nil {
+		renderUserAuthError(w, "Invalid State", "The state parameter does not match. Please restart the authorization flow.")
+		return
+	}
+	existingPayload, err := verifySignedCookiePayload(cookie.Value, h.cookieSecret, authSessionTTL)
+	if err != nil || existingPayload.State != stateParam {
 		renderUserAuthError(w, "Invalid State", "The state parameter does not match. Please restart the authorization flow.")
 		return
 	}
@@ -204,8 +224,17 @@ func (h *userAuthHandler) handleGitHubCallback(w http.ResponseWriter, req *http.
 		return
 	}
 
-	// Store the login in a signed cookie (any pod can read this)
-	setSignedCookie(w, userAuthSessionCookie, login, "/oauth/", h.cookieSecret)
+	// Store the login in a signed cookie, preserving ReturnTo from the original payload
+	updatedPayload := cookiePayload{State: stateParam, Login: login, ReturnTo: existingPayload.ReturnTo}
+	signed := signedCookiePayload(updatedPayload, h.cookieSecret, time.Now())
+	http.SetCookie(w, &http.Cookie{
+		Name:     userAuthSessionCookie,
+		Value:    signed,
+		Path:     "/oauth/",
+		HttpOnly: true,
+		Secure:   true,
+		SameSite: http.SameSiteLaxMode,
+	})
 
 	// Redirect to Atlassian OAuth consent
 	params := url.Values{
@@ -239,12 +268,20 @@ func (h *userAuthHandler) handleAtlassianCallback(w http.ResponseWriter, req *ht
 		return
 	}
 
-	// Resolve login from signed cookie
-	login, err := getSignedCookie(req, userAuthSessionCookie, h.cookieSecret, authSessionTTL)
+	// Resolve login and return_to from signed cookie payload
+	cookie, err := req.Cookie(userAuthSessionCookie)
 	if err != nil {
 		renderUserAuthError(w, "Session Expired", "Your authorization session is missing or expired. Please restart the authorization flow.")
 		return
 	}
+	payload, err := verifySignedCookiePayload(cookie.Value, h.cookieSecret, authSessionTTL)
+	if err != nil {
+		renderUserAuthError(w, "Session Expired", "Your authorization session is missing or expired. Please restart the authorization flow.")
+		return
+	}
+
+	login := payload.Login
+	returnTo := payload.ReturnTo
 
 	if login == "" {
 		renderUserAuthError(w, "Invalid Session", "Session does not contain a valid identity. Please restart the authorization flow.")
@@ -304,7 +341,7 @@ func (h *userAuthHandler) handleAtlassianCallback(w http.ResponseWriter, req *ht
 	})
 
 	log.Info("User authorization complete", "login", login, "cloud_id", cloudID)
-	renderUserAuthSuccess(w, login)
+	renderUserAuthSuccess(w, login, returnTo, h.githubRedirectBaseURL, h.redirectDelaySec)
 }
 
 // exchangeGitHubCode exchanges a GitHub OAuth authorization code for a user
@@ -467,18 +504,42 @@ You can close this page and try the authorization flow again from your GitHub is
 }
 
 // renderUserAuthSuccess renders the success page after completing the user
-// authorization flow.
-func renderUserAuthSuccess(w http.ResponseWriter, login string) {
+// authorization flow. When returnTo starts with "/", it renders a meta-refresh
+// redirect to githubBaseURL+returnTo. Otherwise it renders a generic success message.
+func renderUserAuthSuccess(w http.ResponseWriter, login, returnTo, githubBaseURL string, delaySec int) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintf(w, `<!DOCTYPE html>
+
+	if delaySec <= 0 {
+		delaySec = 3
+	}
+
+	if strings.HasPrefix(returnTo, "/") {
+		redirectURL := githubBaseURL + returnTo
+		fmt.Fprintf(w, `<!DOCTYPE html>
+<html>
+<head>
+<title>Jira Bot — Authorization Complete</title>
+<meta http-equiv="refresh" content="%d;url=%s">
+</head>
+<body style="font-family: system-ui, sans-serif; max-width: 600px; margin: 40px auto; padding: 0 20px;">
+<h1 style="color: #2e7d32;">&#10004; Authorization Complete</h1>
+<p>Your Atlassian account has been linked to your GitHub identity (<strong>%s</strong>).</p>
+<p style="background: #e8f5e9; padding: 12px; border-radius: 4px;">
+Redirecting you back... <a href="%s">Click here</a> if you are not redirected automatically.
+</p>
+</body>
+</html>`, delaySec, redirectURL, login, redirectURL)
+	} else {
+		fmt.Fprintf(w, `<!DOCTYPE html>
 <html>
 <head><title>Jira Bot — Authorization Complete</title></head>
 <body style="font-family: system-ui, sans-serif; max-width: 600px; margin: 40px auto; padding: 0 20px;">
 <h1 style="color: #2e7d32;">&#10004; Authorization Complete</h1>
 <p>Your Atlassian account has been linked to your GitHub identity (<strong>%s</strong>).</p>
 <p style="background: #e8f5e9; padding: 12px; border-radius: 4px;">
-You can now close this page and return to your GitHub issue or PR to run the <code>/jira create</code> command again.
+Return to your GitHub issue or PR and retry the command.
 </p>
 </body>
 </html>`, login)
+	}
 }

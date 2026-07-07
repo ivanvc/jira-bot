@@ -4,12 +4,40 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 	"time"
 )
+
+// cookiePayload is the JSON structure stored in the signed session cookie.
+type cookiePayload struct {
+	State    string `json:"s"`           // CSRF state token
+	Login    string `json:"l,omitempty"` // GitHub login (set after GitHub callback)
+	ReturnTo string `json:"r,omitempty"` // return path (e.g., "/org/repo/issues/42")
+}
+
+// signedCookiePayload marshals a cookiePayload to JSON, then signs it using
+// the existing signedCookieValue function.
+func signedCookiePayload(p cookiePayload, secret string, now time.Time) string {
+	data, _ := json.Marshal(p)
+	return signedCookieValue(string(data), secret, now)
+}
+
+// verifySignedCookiePayload verifies and unmarshals a signed cookie into a cookiePayload.
+func verifySignedCookiePayload(cookieValue, secret string, ttl time.Duration) (cookiePayload, error) {
+	raw, err := verifySignedCookie(cookieValue, secret, ttl)
+	if err != nil {
+		return cookiePayload{}, err
+	}
+	var p cookiePayload
+	if err := json.Unmarshal([]byte(raw), &p); err != nil {
+		return cookiePayload{}, errMalformedCookie
+	}
+	return p, nil
+}
 
 var (
 	errInvalidSignature = errors.New("invalid cookie signature")

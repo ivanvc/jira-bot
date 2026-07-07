@@ -63,6 +63,8 @@ func newTestAuthHandler(store *mockUserTokenStore) *userAuthHandler {
 		cloudID:               "test-cloud-id-abc123",
 		store:                 store,
 		cookieSecret:          "test-cookie-secret",
+		githubRedirectBaseURL: "https://github.com",
+		redirectDelaySec:      3,
 	}
 }
 
@@ -116,10 +118,46 @@ func TestHandleAuthorize_RedirectsToGitHub(t *testing.T) {
 	assert.True(t, sessionCookie.HttpOnly)
 	assert.True(t, sessionCookie.Secure)
 
-	// Verify the cookie contains the state (verify by extracting)
-	extractedState, err := verifySignedCookie(sessionCookie.Value, "test-cookie-secret", authSessionTTL)
+	// Verify the cookie contains the state (verify by extracting the JSON payload)
+	payload, err := verifySignedCookiePayload(sessionCookie.Value, "test-cookie-secret", authSessionTTL)
 	require.NoError(t, err)
-	assert.Equal(t, state, extractedState)
+	assert.Equal(t, state, payload.State)
+	assert.Empty(t, payload.ReturnTo, "ReturnTo should be empty when no return_to query param is provided")
+}
+
+// TestHandleAuthorize_WithReturnTo verifies that when a return_to query parameter
+// is provided, it is stored in the JSON cookie payload alongside the state.
+// Validates: Requirement 2.1
+func TestHandleAuthorize_WithReturnTo(t *testing.T) {
+	store := newMockUserTokenStore()
+	handler := newTestAuthHandler(store)
+
+	req := httptest.NewRequest(http.MethodGet, "/oauth/authorize?return_to=%2Forg%2Frepo%2Fissues%2F42", nil)
+	rec := httptest.NewRecorder()
+
+	handler.handleAuthorize(rec, req)
+
+	result := rec.Result()
+	defer result.Body.Close()
+
+	// Should redirect (302)
+	assert.Equal(t, http.StatusFound, result.StatusCode)
+
+	// Find the session cookie
+	var sessionCookie *http.Cookie
+	for _, c := range result.Cookies() {
+		if c.Name == userAuthSessionCookie {
+			sessionCookie = c
+			break
+		}
+	}
+	require.NotNil(t, sessionCookie, "session cookie should be set")
+
+	// Verify the cookie payload includes both state and return_to
+	payload, err := verifySignedCookiePayload(sessionCookie.Value, "test-cookie-secret", authSessionTTL)
+	require.NoError(t, err)
+	assert.Len(t, payload.State, 64, "state should be 64 hex chars")
+	assert.Equal(t, "/org/repo/issues/42", payload.ReturnTo)
 }
 
 // TestHandleGitHubCallback_ExchangesCodeAndRedirectsToAtlassian tests the full
@@ -157,9 +195,10 @@ func TestHandleGitHubCallback_ExchangesCodeAndRedirectsToAtlassian(t *testing.T)
 	handler.githubTokenURL = ghTokenServer.URL
 	handler.githubUserAPIURL = ghUserServer.URL
 
-	// Create a signed cookie containing the state value (simulates handleAuthorize)
+	// Create a signed JSON cookie containing the state value (simulates handleAuthorize)
 	stateValue := "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
-	signedState := signedCookieValue(stateValue, "test-cookie-secret", time.Now())
+	initialPayload := cookiePayload{State: stateValue, ReturnTo: "/org/repo/issues/7"}
+	signedState := signedCookiePayload(initialPayload, "test-cookie-secret", time.Now())
 
 	reqURL := fmt.Sprintf("/oauth/github/callback?code=test-auth-code&state=%s", stateValue)
 	req := httptest.NewRequest(http.MethodGet, reqURL, nil)
@@ -197,7 +236,7 @@ func TestHandleGitHubCallback_ExchangesCodeAndRedirectsToAtlassian(t *testing.T)
 	assert.Equal(t, "consent", q.Get("prompt"))
 	assert.Equal(t, "http://localhost:8080/oauth/atlassian/callback", q.Get("redirect_uri"))
 
-	// Verify the new session cookie contains the "octocat" login
+	// Verify the new session cookie contains the login AND preserves ReturnTo
 	var loginCookie *http.Cookie
 	for _, c := range result.Cookies() {
 		if c.Name == userAuthSessionCookie {
@@ -206,9 +245,10 @@ func TestHandleGitHubCallback_ExchangesCodeAndRedirectsToAtlassian(t *testing.T)
 		}
 	}
 	require.NotNil(t, loginCookie, "session cookie should be set with login")
-	extractedLogin, err := verifySignedCookie(loginCookie.Value, "test-cookie-secret", authSessionTTL)
+	updatedPayload, err := verifySignedCookiePayload(loginCookie.Value, "test-cookie-secret", authSessionTTL)
 	require.NoError(t, err)
-	assert.Equal(t, "octocat", extractedLogin)
+	assert.Equal(t, "octocat", updatedPayload.Login)
+	assert.Equal(t, "/org/repo/issues/7", updatedPayload.ReturnTo, "ReturnTo should be preserved across cookie rewrite")
 }
 
 // TestHandleAtlassianCallback_ExchangesCodeAndStoresToken tests the Atlassian
@@ -241,8 +281,9 @@ func TestHandleAtlassianCallback_ExchangesCodeAndStoresToken(t *testing.T) {
 
 	store := newMockUserTokenStore()
 
-	// Create a signed cookie with a verified login (post-GitHub-OAuth)
-	signedLogin := signedCookieValue("octocat", "test-cookie-secret", time.Now())
+	// Create a signed JSON cookie with a verified login (post-GitHub-OAuth)
+	loginPayload := cookiePayload{State: "somestate", Login: "octocat"}
+	signedLogin := signedCookiePayload(loginPayload, "test-cookie-secret", time.Now())
 
 	handler := newTestAuthHandler(store)
 	handler.atlassianTokenURL = atlTokenServer.URL
@@ -282,8 +323,9 @@ func TestHandleAtlassianCallback_ExpiredSession(t *testing.T) {
 	store := newMockUserTokenStore()
 	handler := newTestAuthHandler(store)
 
-	// Create a signed cookie with an old timestamp so it's expired
-	expiredCookie := signedCookieValue("octocat", "test-cookie-secret", time.Now().Add(-20*time.Minute))
+	// Create a signed JSON cookie with an old timestamp so it's expired
+	expiredPayload := cookiePayload{State: "somestate", Login: "octocat"}
+	expiredCookie := signedCookiePayload(expiredPayload, "test-cookie-secret", time.Now().Add(-20*time.Minute))
 
 	req := httptest.NewRequest(http.MethodGet, "/oauth/atlassian/callback?code=test-code", nil)
 	req.AddCookie(&http.Cookie{
@@ -310,7 +352,8 @@ func TestHandleAtlassianCallback_MissingCode(t *testing.T) {
 	store := newMockUserTokenStore()
 	handler := newTestAuthHandler(store)
 
-	signedLogin := signedCookieValue("octocat", "test-cookie-secret", time.Now())
+	loginPayload := cookiePayload{State: "somestate", Login: "octocat"}
+	signedLogin := signedCookiePayload(loginPayload, "test-cookie-secret", time.Now())
 
 	// Request without code parameter
 	req := httptest.NewRequest(http.MethodGet, "/oauth/atlassian/callback", nil)
@@ -346,9 +389,10 @@ func TestHandleGitHubCallback_ExchangeFailure(t *testing.T) {
 	handler := newTestAuthHandler(store)
 	handler.githubTokenURL = ghTokenServer.URL
 
-	// Create a signed cookie with the state value
+	// Create a signed JSON cookie with the state value
 	stateValue := "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
-	signedState := signedCookieValue(stateValue, "test-cookie-secret", time.Now())
+	statePayload := cookiePayload{State: stateValue}
+	signedState := signedCookiePayload(statePayload, "test-cookie-secret", time.Now())
 
 	reqURL := fmt.Sprintf("/oauth/github/callback?code=bad-code&state=%s", stateValue)
 	req := httptest.NewRequest(http.MethodGet, reqURL, nil)
@@ -417,7 +461,8 @@ func TestHandleAtlassianCallback_UsesCloudID(t *testing.T) {
 	defer atlTokenServer.Close()
 
 	store := newMockUserTokenStore()
-	signedLogin := signedCookieValue("testuser", "test-cookie-secret", time.Now())
+	loginPayload := cookiePayload{State: "somestate", Login: "testuser"}
+	signedLogin := signedCookiePayload(loginPayload, "test-cookie-secret", time.Now())
 
 	// Handler with specific global Cloud ID
 	handler := newTestAuthHandler(store)
@@ -456,7 +501,8 @@ func TestHandleAtlassianCallback_EmptyCloudID(t *testing.T) {
 	defer atlTokenServer.Close()
 
 	store := newMockUserTokenStore()
-	signedLogin := signedCookieValue("testuser", "test-cookie-secret", time.Now())
+	loginPayload := cookiePayload{State: "somestate", Login: "testuser"}
+	signedLogin := signedCookiePayload(loginPayload, "test-cookie-secret", time.Now())
 
 	handler := newTestAuthHandler(store)
 	handler.atlassianTokenURL = atlTokenServer.URL
@@ -511,7 +557,8 @@ func TestFetchAtlassianAccountID_Success(t *testing.T) {
 	defer atlTokenServer.Close()
 
 	store := newMockUserTokenStore()
-	signedLogin := signedCookieValue("testuser", "test-cookie-secret", time.Now())
+	loginPayload := cookiePayload{State: "somestate", Login: "testuser"}
+	signedLogin := signedCookiePayload(loginPayload, "test-cookie-secret", time.Now())
 
 	handler := newTestAuthHandler(store)
 	handler.atlassianTokenURL = atlTokenServer.URL
@@ -565,7 +612,8 @@ func TestFetchAtlassianAccountID_Non200_CompletesWithoutError(t *testing.T) {
 	defer atlTokenServer.Close()
 
 	store := newMockUserTokenStore()
-	signedLogin := signedCookieValue("testuser", "test-cookie-secret", time.Now())
+	loginPayload := cookiePayload{State: "somestate", Login: "testuser"}
+	signedLogin := signedCookiePayload(loginPayload, "test-cookie-secret", time.Now())
 
 	handler := newTestAuthHandler(store)
 	handler.atlassianTokenURL = atlTokenServer.URL
@@ -622,7 +670,8 @@ func TestFetchAtlassianAccountID_InvalidJSON_CompletesWithoutError(t *testing.T)
 	defer atlTokenServer.Close()
 
 	store := newMockUserTokenStore()
-	signedLogin := signedCookieValue("testuser", "test-cookie-secret", time.Now())
+	loginPayload := cookiePayload{State: "somestate", Login: "testuser"}
+	signedLogin := signedCookiePayload(loginPayload, "test-cookie-secret", time.Now())
 
 	handler := newTestAuthHandler(store)
 	handler.atlassianTokenURL = atlTokenServer.URL

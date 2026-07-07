@@ -318,3 +318,29 @@ func TestLoadConfig_JiraDefaultAssign_DefaultsFalse(t *testing.T) {
 	cfg := LoadConfig()
 	assert.False(t, cfg.JiraDefaultAssign, "JiraDefaultAssign should default to false when env var is unset")
 }
+
+// --- GitHubRedirectBaseURL config tests ---
+
+func TestLoadConfig_GitHubRedirectBaseURL_Default(t *testing.T) {
+	t.Setenv("JIRA_BOT_GITHUB_APP_ID", "12345")
+	t.Setenv("JIRA_BOT_GITHUB_PRIVATE_KEY", "test-private-key")
+	t.Setenv("JIRA_BOT_GITHUB_WEBHOOK_SECRET", "webhook-secret")
+	t.Setenv("JIRA_BOT_JIRA_DEFAULT_PROJECT", "PROJ")
+	t.Setenv("JIRA_BOT_JIRA_DEFAULT_ISSUE_TYPE", "Task")
+	// Do NOT set JIRA_BOT_GITHUB_REDIRECT_BASE_URL
+
+	cfg := LoadConfig()
+	assert.Equal(t, "https://github.com", cfg.GitHubRedirectBaseURL, "GitHubRedirectBaseURL should default to https://github.com")
+}
+
+func TestLoadConfig_GitHubRedirectBaseURL_Custom(t *testing.T) {
+	t.Setenv("JIRA_BOT_GITHUB_APP_ID", "12345")
+	t.Setenv("JIRA_BOT_GITHUB_PRIVATE_KEY", "test-private-key")
+	t.Setenv("JIRA_BOT_GITHUB_WEBHOOK_SECRET", "webhook-secret")
+	t.Setenv("JIRA_BOT_JIRA_DEFAULT_PROJECT", "PROJ")
+	t.Setenv("JIRA_BOT_JIRA_DEFAULT_ISSUE_TYPE", "Task")
+	t.Setenv("JIRA_BOT_GITHUB_REDIRECT_BASE_URL", "https://github.example.com")
+
+	cfg := LoadConfig()
+	assert.Equal(t, "https://github.example.com", cfg.GitHubRedirectBaseURL, "GitHubRedirectBaseURL should use custom value from env var")
+}

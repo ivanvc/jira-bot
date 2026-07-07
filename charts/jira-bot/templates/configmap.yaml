@@ -29,3 +29,9 @@ data:
   {{- if .Values.config.listenHTTP }}
   JIRA_BOT_LISTEN_HTTP: {{ .Values.config.listenHTTP }}
   {{- end }}
+  {{- if .Values.config.github.redirect.baseURL }}
+  JIRA_BOT_GITHUB_REDIRECT_BASE_URL: {{ .Values.config.github.redirect.baseURL }}
+  {{- end }}
+  {{- if .Values.config.github.redirect.delaySecs }}
+  JIRA_BOT_GITHUB_REDIRECT_DELAY_SECONDS: {{ .Values.config.github.redirect.delaySecs | quote }}
+  {{- end }}
