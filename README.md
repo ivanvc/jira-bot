@@ -59,6 +59,7 @@ The bot uses OAuth 2.0 (3LO) to authenticate individual users with Jira Cloud.
 3. Under **Jira platform REST API**, add:
    - `write:jira-work` (Create and edit issues)
    - `read:jira-work` (Read issues)
+   - `read:jira-user` (Read user information, required for auto-assign)
 4. Click **Save**
 
 #### 4.3 Configure Authorization
