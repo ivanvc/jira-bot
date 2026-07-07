@@ -62,7 +62,7 @@ func (r *DefaultJiraClientResolver) Resolve(ctx context.Context, login string) c
 	entry, err := r.store.Read(ctx, login)
 	if err != nil {
 		if errors.Is(err, common.ErrNotFound) {
-			return r.authRequiredResult(login)
+			return r.authRequiredResult()
 		}
 		// For other errors (e.g. store read failure), return an error result.
 		return common.JiraClientResolveResult{
@@ -72,7 +72,7 @@ func (r *DefaultJiraClientResolver) Resolve(ctx context.Context, login string) c
 
 	// If entry is marked invalid, treat as no usable token.
 	if entry.Status == "invalid" {
-		return r.authRequiredResult(login)
+		return r.authRequiredResult()
 	}
 
 	// If token is expired, attempt synchronous refresh.
@@ -93,7 +93,7 @@ func (r *DefaultJiraClientResolver) handleExpiredToken(ctx context.Context, logi
 			r.logger.Warn("Sync refresh failed with 4xx, marking invalid",
 				"login", login, "status", statusCode)
 			r.markInvalid(ctx, login, entry)
-			return r.authRequiredResult(login)
+			return r.authRequiredResult()
 		}
 		// 5xx or network error: return error (do NOT mark invalid)
 		r.logger.Error("Sync refresh failed with retryable error",
@@ -208,11 +208,11 @@ func (r *DefaultJiraClientResolver) buildClientResult(entry common.UserTokenEntr
 }
 
 // authRequiredResult builds a result indicating the user must authorize.
-func (r *DefaultJiraClientResolver) authRequiredResult(login string) common.JiraClientResolveResult {
+func (r *DefaultJiraClientResolver) authRequiredResult() common.JiraClientResolveResult {
 	if r.callbackBaseURL == "" {
 		r.logger.Warn("JIRA_BOT_USER_AUTH_CALLBACK_URL is empty — auth link will be a relative URL that won't work on GitHub")
 	}
-	authLink := fmt.Sprintf("%s/oauth/authorize?login=%s", r.callbackBaseURL, login)
+	authLink := fmt.Sprintf("%s/oauth/authorize", r.callbackBaseURL)
 	return common.JiraClientResolveResult{
 		AuthRequired: true,
 		AuthLink:     authLink,
