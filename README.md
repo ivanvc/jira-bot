@@ -36,7 +36,7 @@ The bot uses the GitHub App's OAuth capabilities to verify user identity during 
 2. Check **"Request user authorization (OAuth) during installation"** (or enable it post-install)
 3. Set **Callback URL** to: `https://<your-bot-host>/oauth/user/github/callback`
 4. Click **Generate a new client secret** — this becomes your `JIRA_BOT_GITHUB_APP_CLIENT_SECRET`
-5. Note the **Client ID** shown on the app's settings page (same as `JIRA_BOT_GITHUB_APP_ID` for most setups)
+5. Note the **Client ID** shown on the app's settings page — this becomes your `JIRA_BOT_GITHUB_APP_CLIENT_ID` (it looks like `Iv23liXXXXXX`, distinct from the numeric App ID)
 
 ### 3. Install App
 
@@ -78,6 +78,7 @@ The bot uses OAuth 2.0 (3LO) to authenticate individual users with Jira Cloud.
 ```bash
 # GitHub App (required)
 JIRA_BOT_GITHUB_APP_ID=123456
+JIRA_BOT_GITHUB_APP_CLIENT_ID=Iv23lixxxxxxxxxx
 JIRA_BOT_GITHUB_PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\n..."
 JIRA_BOT_GITHUB_WEBHOOK_SECRET=$(openssl rand -hex 20)
 JIRA_BOT_GITHUB_APP_CLIENT_SECRET=your-github-app-client-secret
@@ -110,7 +111,8 @@ helm install jira-bot charts/jira-bot \
   --set secrets.github.appClientSecret="your-github-app-client-secret" \
   --set secrets.jira.clientID="your-atlassian-client-id" \
   --set secrets.jira.clientSecret="your-atlassian-client-secret" \
-  --set config.githubAppID="123456" \
+  --set config.github.appID="123456" \
+  --set config.github.clientID="Iv23lixxxxxxxxxx" \
   --set config.jira.cloudID="your-cloud-id" \
   --set config.jira.defaultProject="ENG" \
   --set config.jira.defaultIssueType="Task" \
@@ -123,8 +125,10 @@ Or using a values file (`values-production.yaml`):
 replicaCount: 2
 
 config:
-  githubAppID: "123456"
   callbackURL: https://jira-bot.example.com
+  github:
+    appID: "123456"
+    clientID: "Iv23lixxxxxxxxxx"
   jira:
     cloudID: your-atlassian-cloud-id
     defaultProject: ENG
@@ -148,6 +152,7 @@ secrets:
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `JIRA_BOT_GITHUB_APP_ID` | Yes | — | GitHub App ID |
+| `JIRA_BOT_GITHUB_APP_CLIENT_ID` | Yes | — | GitHub App OAuth Client ID (e.g. `Iv23liXXXXXX`) |
 | `JIRA_BOT_GITHUB_PRIVATE_KEY` | Yes | — | GitHub App private key (PEM) |
 | `JIRA_BOT_GITHUB_WEBHOOK_SECRET` | Yes | — | GitHub webhook secret |
 | `JIRA_BOT_GITHUB_APP_CLIENT_SECRET` | Yes | — | GitHub App client secret for user-to-server OAuth |
@@ -215,7 +220,8 @@ If RBAC permissions are missing, the bot cannot store or retrieve user tokens an
 
 | Value | Default | Description |
 |-------|---------|-------------|
-| `config.githubAppID` | — | GitHub App ID (required) |
+| `config.github.appID` | — | GitHub App ID (required) |
+| `config.github.clientID` | — | GitHub App OAuth Client ID, e.g. `Iv23liXXXXXX` (required) |
 | `config.callbackURL` | — | Base URL for OAuth callbacks, e.g. `https://jira-bot.example.com` (required, no trailing slash) |
 | `config.tokenSecretName` | `{{ fullname }}-user-tokens` | K8s Secret name for per-user tokens |
 | `config.refreshCheckInterval` | `30s` | Token refresh check interval |

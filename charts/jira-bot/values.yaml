@@ -25,8 +25,11 @@ config:
     defaultAssign: false
     # Required: Atlassian Cloud ID for the target Jira site
     cloudID: ""
-  # Required: The GitHub App ID
-  githubAppID: ""
+  github:
+    # Required: The GitHub App ID
+    appID: ""
+    # Required: The GitHub App's OAuth Client ID (from the app's settings page, e.g. Iv23liXXXXXX)
+    clientID: ""
   namespace: ""
 
 secrets:

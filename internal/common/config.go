@@ -34,6 +34,7 @@ type Config struct {
 	TokenLeaseName     string        // JIRA_BOT_TOKEN_LEASE_NAME
 
 	// Per-user token fields
+	GitHubAppClientID     string        // JIRA_BOT_GITHUB_APP_CLIENT_ID
 	GitHubAppClientSecret string        // JIRA_BOT_GITHUB_APP_CLIENT_SECRET
 	UserTokenSecretName   string        // JIRA_BOT_USER_TOKEN_SECRET_NAME
 	UserAuthCallbackURL   string        // JIRA_BOT_USER_AUTH_CALLBACK_URL
@@ -71,6 +72,7 @@ func LoadConfig() Config {
 	cfg.LeaseRenewDeadline = loadEnvDuration("JIRA_BOT_LEASE_RENEW_DEADLINE", 10*time.Second)
 
 	// Per-user token config
+	cfg.GitHubAppClientID = loadEnvWithDefault("JIRA_BOT_GITHUB_APP_CLIENT_ID", "")
 	cfg.GitHubAppClientSecret = loadEnvWithDefault("JIRA_BOT_GITHUB_APP_CLIENT_SECRET", "")
 	cfg.UserTokenSecretName = loadEnvWithDefault("JIRA_BOT_USER_TOKEN_SECRET_NAME", "")
 	cfg.UserAuthCallbackURL = loadEnvWithDefault("JIRA_BOT_USER_AUTH_CALLBACK_URL", "")

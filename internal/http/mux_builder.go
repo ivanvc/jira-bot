@@ -66,7 +66,7 @@ func handleRootStatus(w http.ResponseWriter, req *http.Request) {
 </html>`)
 }
 
-// loadGitHubAppClientID returns the GitHub App ID as a string for use in OAuth redirects.
+// loadGitHubAppClientID returns the GitHub App's OAuth Client ID for use in OAuth redirects.
 func loadGitHubAppClientID(state *common.State) string {
-	return fmt.Sprintf("%d", state.Config.GitHubAppID)
+	return state.Config.GitHubAppClientID
 }
