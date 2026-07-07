@@ -211,7 +211,7 @@ func (h *userAuthHandler) handleGitHubCallback(w http.ResponseWriter, req *http.
 	params := url.Values{
 		"audience":      {"api.atlassian.com"},
 		"client_id":     {h.atlClientID},
-		"scope":         {"offline_access read:jira-work write:jira-work"},
+		"scope":         {"offline_access read:me read:jira-work write:jira-work"},
 		"redirect_uri":  {h.atlCallbackURL},
 		"state":         {login}, // state is just for logging/debugging; not security-critical here
 		"response_type": {"code"},
