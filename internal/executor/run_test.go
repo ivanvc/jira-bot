@@ -2025,3 +2025,36 @@ func TestResolveJiraClient_ValidHTMLURL_ReturnToAppended(t *testing.T) {
 	// Auth link should contain the return_to parameter with percent-encoded path
 	assert.Contains(t, authBody, "?return_to=%2Forg%2Frepo%2Fissues%2F42")
 }
+
+func TestCreateJiraIssue_AssignNotSentAsJiraField(t *testing.T) {
+	// Regression test: assign:true and assign:false must NOT be sent to Jira
+	// as a field override (Jira doesn't have an "assign" field and rejects it).
+	tests := []struct {
+		name    string
+		command string
+	}{
+		{"assign:true not sent as field", "/jira create assign:true"},
+		{"assign:false not sent as field", "/jira create assign:false"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			gh := &MockGitHubClient{}
+			jira := &MockJiraClient{ReturnKey: "ENG-999"}
+			state := newTestState(gh, jira)
+
+			ic := newIssueComment(tc.command, "Issue body")
+
+			err := Run(context.Background(), state, ic)
+
+			require.NoError(t, err)
+			require.Len(t, jira.Calls, 1)
+			assert.Equal(t, "CreateIssue", jira.Calls[0].Method)
+
+			// "assign" must NOT appear in extraFields — it's a control option, not a Jira field
+			extraFields := jira.Calls[0].Args[4].(map[string]interface{})
+			assert.NotContains(t, extraFields, "assign",
+				"assign should be excluded from Jira fields; it is a reserved control option")
+		})
+	}
+}

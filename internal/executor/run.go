@@ -445,7 +445,7 @@ func loadFieldsFromCommand(options []string) map[string]interface{} {
 		value := parts[1]
 
 		// Skip reserved keys
-		if key == "project" || key == "type" {
+		if key == "project" || key == "type" || key == "assign" {
 			continue
 		}
 
