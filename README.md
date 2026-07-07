@@ -34,7 +34,7 @@ The bot uses the GitHub App's OAuth capabilities to verify user identity during 
 
 1. In your GitHub App settings, scroll to **Identifying and authorizing users**
 2. Check **"Request user authorization (OAuth) during installation"** (or enable it post-install)
-3. Set **Callback URL** to: `https://<your-bot-host>/oauth/user/github/callback`
+3. Set **Callback URL** to: `https://<your-bot-host>/oauth/github/callback`
 4. Click **Generate a new client secret** — this becomes your `JIRA_BOT_GITHUB_APP_CLIENT_SECRET`
 5. Note the **Client ID** shown on the app's settings page — this becomes your `JIRA_BOT_GITHUB_APP_CLIENT_ID` (it looks like `Iv23liXXXXXX`, distinct from the numeric App ID)
 
@@ -65,7 +65,7 @@ The bot uses OAuth 2.0 (3LO) to authenticate individual users with Jira Cloud.
 
 1. Go to **Authorization** in the left sidebar
 2. Click **Add** next to **OAuth 2.0 (3LO)**
-3. Set the **Callback URL** to: `https://<your-bot-host>/oauth/user/atlassian/callback`
+3. Set the **Callback URL** to: `https://<your-bot-host>/oauth/atlassian/callback`
 4. Click **Save**
 
 #### 4.4 Get Client Credentials
