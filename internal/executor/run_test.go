@@ -2026,6 +2026,49 @@ func TestResolveJiraClient_ValidHTMLURL_ReturnToAppended(t *testing.T) {
 	assert.Contains(t, authBody, "?return_to=%2Forg%2Frepo%2Fissues%2F42")
 }
 
+func TestCreateJiraIssue_CRLFLineEndings_CommandParsedCorrectly(t *testing.T) {
+	// When GitHub sends comment bodies with \r\n line endings,
+	// the command should still be recognized and the issue should be created.
+	gh := &MockGitHubClient{}
+	jira := &MockJiraClient{ReturnKey: "ENG-900"}
+	state := newTestState(gh, jira)
+
+	// Simulate \r\n line endings as sent by GitHub
+	commentBody := "/jira create project:ENG\r\nThis is a custom description"
+	ic := newIssueComment(commentBody, "Issue body")
+
+	err := Run(context.Background(), state, ic)
+
+	require.NoError(t, err)
+	require.Len(t, jira.Calls, 1, "CreateIssue should have been called")
+	assert.Equal(t, "CreateIssue", jira.Calls[0].Method)
+	assert.Equal(t, "ENG", jira.Calls[0].Args[0])
+
+	// Verify the custom description was extracted (not the issue body)
+	description := jira.Calls[0].Args[3].(string)
+	assert.Contains(t, description, "This is a custom description")
+}
+
+func TestCreateJiraIssue_CRLFLineEndings_NoBodyText(t *testing.T) {
+	// \r\n at end of single-line command (e.g., trailing whitespace from GitHub)
+	gh := &MockGitHubClient{}
+	jira := &MockJiraClient{ReturnKey: "ENG-901"}
+	state := newTestState(gh, jira)
+
+	commentBody := "/jira create project:ENG\r\n"
+	ic := newIssueComment(commentBody, "Issue body used as fallback")
+
+	err := Run(context.Background(), state, ic)
+
+	require.NoError(t, err)
+	require.Len(t, jira.Calls, 1, "CreateIssue should have been called")
+	assert.Equal(t, "CreateIssue", jira.Calls[0].Method)
+
+	// Should fall back to issue body since no custom description after \r\n
+	description := jira.Calls[0].Args[3].(string)
+	assert.Contains(t, description, "Issue body used as fallback")
+}
+
 func TestCreateJiraIssue_AssignNotSentAsJiraField(t *testing.T) {
 	// Regression test: assign:true and assign:false must NOT be sent to Jira
 	// as a field override (Jira doesn't have an "assign" field and rejects it).

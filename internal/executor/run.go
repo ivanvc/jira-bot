@@ -110,6 +110,7 @@ func Run(ctx context.Context, state *common.State, issueComment *github.IssueCom
 	if idx := strings.IndexByte(firstLine, '\n'); idx >= 0 {
 		firstLine = firstLine[:idx]
 	}
+	firstLine = strings.TrimRight(firstLine, "\r")
 
 	parts := tokenizeLine(firstLine)
 	if len(parts) == 1 {
