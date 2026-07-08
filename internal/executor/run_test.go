@@ -48,6 +48,11 @@ func (m *MockGitHubClient) UpdateIssueDescription(ctx context.Context, installat
 	return m.UpdateErr
 }
 
+func (m *MockGitHubClient) FetchComment(ctx context.Context, installationID int64, commentID uint64) (*github.IssueComment, error) {
+	m.Calls = append(m.Calls, MockCall{Method: "FetchComment", Args: []interface{}{ctx, installationID, commentID}})
+	return nil, nil
+}
+
 // MockJiraClient implements common.JiraClientInterface for testing.
 type MockJiraClient struct {
 	ReturnKey string
@@ -1969,8 +1974,9 @@ func TestResolveJiraClient_EmptyHTMLURL_NoReturnToAppended(t *testing.T) {
 	require.NotEmpty(t, authBody, "Expected a PostComment call with auth link")
 	// Auth link should NOT contain return_to
 	assert.NotContains(t, authBody, "return_to")
-	// Auth link should be the bare URL without query params
-	assert.Contains(t, authBody, "https://bot.example.com/oauth/authorize)")
+	// Auth link should contain comment_id and installation_id
+	assert.Contains(t, authBody, "comment_id=0")
+	assert.Contains(t, authBody, "installation_id=42")
 }
 
 func TestResolveJiraClient_ValidHTMLURL_ReturnToAppended(t *testing.T) {
@@ -2023,7 +2029,7 @@ func TestResolveJiraClient_ValidHTMLURL_ReturnToAppended(t *testing.T) {
 	}
 	require.NotEmpty(t, authBody, "Expected a PostComment call with auth link")
 	// Auth link should contain the return_to parameter with percent-encoded path
-	assert.Contains(t, authBody, "?return_to=%2Forg%2Frepo%2Fissues%2F42")
+	assert.Contains(t, authBody, "return_to=%2Forg%2Frepo%2Fissues%2F42")
 }
 
 func TestCreateJiraIssue_CRLFLineEndings_CommandParsedCorrectly(t *testing.T) {
@@ -2098,6 +2104,135 @@ func TestCreateJiraIssue_AssignNotSentAsJiraField(t *testing.T) {
 			extraFields := jira.Calls[0].Args[4].(map[string]interface{})
 			assert.NotContains(t, extraFields, "assign",
 				"assign should be excluded from Jira fields; it is a reserved control option")
+		})
+	}
+}
+
+// --- 8.2 Auth link construction with comment context tests ---
+
+func TestResolveJiraClient_AuthLinkContainsCommentIDAndInstallationID(t *testing.T) {
+	// Validates: Requirements 1.1
+	// When resolveJiraClient posts an auth link, it should contain comment_id and
+	// installation_id query parameters matching the issueComment fields.
+	gh := &MockGitHubClient{}
+	resolver := &FlexibleMockResolver{
+		Result: common.JiraClientResolveResult{
+			AuthRequired: true,
+			AuthLink:     "https://bot.example.com/oauth/authorize",
+		},
+	}
+	state := &common.State{
+		Config: common.Config{
+			JiraDefaultProject:   "DEFAULT",
+			JiraDefaultIssueType: "Task",
+		},
+		GitHubClient:       gh,
+		JiraClientResolver: resolver,
+	}
+
+	ic := &github.IssueComment{
+		Action: "created",
+		Issue: github.Issue{
+			Title:   "Test Issue",
+			Body:    "Issue body",
+			HTMLURL: "https://github.com/org/repo/issues/7",
+		},
+		Comment: github.Comment{
+			Body: "/jira create",
+			ID:   98765,
+			User: github.CommentUser{Login: "testuser"},
+		},
+		Installation: github.Installation{ID: 555},
+	}
+
+	err := Run(context.Background(), state, ic)
+
+	require.NoError(t, err)
+	// Find the PostComment call with the auth link
+	var authBody string
+	for _, call := range gh.Calls {
+		if call.Method == "PostComment" {
+			body := call.Args[3].(string)
+			if strings.Contains(body, "authorize") {
+				authBody = body
+				break
+			}
+		}
+	}
+	require.NotEmpty(t, authBody, "Expected a PostComment call with auth link")
+	// Auth link should contain comment_id matching Comment.ID
+	assert.Contains(t, authBody, "comment_id=98765")
+	// Auth link should contain installation_id matching Installation.ID
+	assert.Contains(t, authBody, "installation_id=555")
+}
+
+func TestResolveJiraClient_AuthLinkCommentContextValuesMatchIssueComment(t *testing.T) {
+	// Validates: Requirements 1.1
+	// Verify that different Comment.ID and Installation.ID values are correctly
+	// reflected in the auth link query parameters.
+	tests := []struct {
+		name           string
+		commentID      uint64
+		installationID int64
+	}{
+		{"zero comment ID", 0, 100},
+		{"large comment ID", 1234567890, 99},
+		{"large installation ID", 42, 9876543210},
+		{"both large values", 18446744073709551615, 9223372036854775807},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			gh := &MockGitHubClient{}
+			resolver := &FlexibleMockResolver{
+				Result: common.JiraClientResolveResult{
+					AuthRequired: true,
+					AuthLink:     "https://bot.example.com/oauth/authorize",
+				},
+			}
+			state := &common.State{
+				Config: common.Config{
+					JiraDefaultProject:   "DEFAULT",
+					JiraDefaultIssueType: "Task",
+				},
+				GitHubClient:       gh,
+				JiraClientResolver: resolver,
+			}
+
+			ic := &github.IssueComment{
+				Action: "created",
+				Issue: github.Issue{
+					Title:   "Test Issue",
+					Body:    "Issue body",
+					HTMLURL: "https://github.com/org/repo/issues/1",
+				},
+				Comment: github.Comment{
+					Body: "/jira create",
+					ID:   tc.commentID,
+					User: github.CommentUser{Login: "testuser"},
+				},
+				Installation: github.Installation{ID: tc.installationID},
+			}
+
+			err := Run(context.Background(), state, ic)
+
+			require.NoError(t, err)
+			// Find the PostComment call with the auth link
+			var authBody string
+			for _, call := range gh.Calls {
+				if call.Method == "PostComment" {
+					body := call.Args[3].(string)
+					if strings.Contains(body, "authorize") {
+						authBody = body
+						break
+					}
+				}
+			}
+			require.NotEmpty(t, authBody, "Expected a PostComment call with auth link")
+			expectedCommentID := fmt.Sprintf("comment_id=%d", tc.commentID)
+			expectedInstallationID := fmt.Sprintf("installation_id=%d", tc.installationID)
+			assert.Contains(t, authBody, expectedCommentID)
+			assert.Contains(t, authBody, expectedInstallationID)
 		})
 	}
 }

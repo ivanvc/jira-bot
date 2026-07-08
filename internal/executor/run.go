@@ -129,7 +129,7 @@ func Run(ctx context.Context, state *common.State, issueComment *github.IssueCom
 			return err
 		}
 	case "create":
-		if err := createJiraIssue(ctx, state, issueComment, parts[2:]); err != nil {
+		if _, err := createJiraIssue(ctx, state, issueComment, parts[2:]); err != nil {
 			if errors.Is(err, errAlreadyCreated) {
 				return nil
 			}
@@ -181,7 +181,7 @@ func replyWithHelp(ctx context.Context, state *common.State, issueComment *githu
 	return state.GitHubClient.PostComment(ctx, issueComment.Installation.ID, issueComment, helpText)
 }
 
-func createJiraIssue(ctx context.Context, state *common.State, issueComment *github.IssueComment, options []string) error {
+func createJiraIssue(ctx context.Context, state *common.State, issueComment *github.IssueComment, options []string) (string, error) {
 	// Separate title tokens from option tokens.
 	var titleTokens []string
 	var optionTokens []string
@@ -205,9 +205,9 @@ func createJiraIssue(ctx context.Context, state *common.State, issueComment *git
 	issueBody := issueComment.Issue.Body
 	if strings.Contains(issueBody, "<!--JIRA_BOT_ISSUE") {
 		if err := state.GitHubClient.PostComment(ctx, issueComment.Installation.ID, issueComment, errorAlreadyCreated); err != nil {
-			return err
+			return "", err
 		}
-		return errAlreadyCreated
+		return "", errAlreadyCreated
 	}
 
 	// Load repo config if available
@@ -222,7 +222,7 @@ func createJiraIssue(ctx context.Context, state *common.State, issueComment *git
 			issueComment.Repository.Name,
 		)
 		if err != nil {
-			return fmt.Errorf("loading repo config: %w", err)
+			return "", fmt.Errorf("loading repo config: %w", err)
 		}
 		repoProject = repoCfg.Project
 		repoType = repoCfg.Type
@@ -243,11 +243,11 @@ func createJiraIssue(ctx context.Context, state *common.State, issueComment *git
 	// Resolve the Jira client: per-user via JiraClientResolver, or fallback to global JiraClient.
 	jiraClient, err := resolveJiraClient(ctx, state, issueComment)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if jiraClient == nil {
 		// Auth link was posted or an error comment was posted; nothing more to do.
-		return nil
+		return "", nil
 	}
 
 	// Resolve assign option
@@ -291,14 +291,18 @@ func createJiraIssue(ctx context.Context, state *common.State, issueComment *git
 				}
 			}
 		}
-		return err
+		return "", err
 	}
 	body := fmt.Sprintf("%s\n\n<!--JIRA_BOT_ISSUE:[%s]-->", issueBody, key)
 	if err := state.GitHubClient.UpdateIssueDescription(ctx, issueComment.Installation.ID, issueComment, body); err != nil {
-		return err
+		return "", err
 	}
 
-	return state.GitHubClient.PostComment(ctx, issueComment.Installation.ID, issueComment, fmt.Sprintf(successTextFormat, key))
+	if err := state.GitHubClient.PostComment(ctx, issueComment.Installation.ID, issueComment, fmt.Sprintf(successTextFormat, key)); err != nil {
+		return "", err
+	}
+
+	return key, nil
 }
 
 // resolveJiraClient determines which Jira client to use for issue creation.
@@ -325,8 +329,16 @@ func resolveJiraClient(ctx context.Context, state *common.State, issueComment *g
 
 	if result.AuthRequired {
 		authLink := result.AuthLink
-		if path := extractPath(issueComment.Issue.HTMLURL); path != "" {
-			authLink = authLink + "?return_to=" + url.QueryEscape(path)
+		u, err := url.Parse(authLink)
+		if err == nil {
+			q := u.Query()
+			if path := extractPath(issueComment.Issue.HTMLURL); path != "" {
+				q.Set("return_to", path)
+			}
+			q.Set("comment_id", fmt.Sprintf("%d", issueComment.Comment.ID))
+			q.Set("installation_id", fmt.Sprintf("%d", issueComment.Installation.ID))
+			u.RawQuery = q.Encode()
+			authLink = u.String()
 		}
 		authMsg := fmt.Sprintf(":lock: You need to authorize the bot with your Jira account before creating issues. Please [authorize here](%s) and try again.", authLink)
 		if err := state.GitHubClient.PostComment(ctx, issueComment.Installation.ID, issueComment, authMsg); err != nil {

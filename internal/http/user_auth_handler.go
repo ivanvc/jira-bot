@@ -10,11 +10,13 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/charmbracelet/log"
 	"github.com/ivanvc/jira-bot/internal/common"
+	"github.com/ivanvc/jira-bot/internal/executor"
 )
 
 // randRead is a variable for testing (allows deterministic state generation in tests).
@@ -45,6 +47,7 @@ type userAuthHandler struct {
 	cookieSecret          string // HMAC secret for signed cookies (uses githubAppClientSecret)
 	githubRedirectBaseURL string // Base URL prepended to stored path for post-OAuth redirect
 	redirectDelaySec      int    // Seconds before auto-redirect on success page
+	state                 *common.State // Full application state for auto-execution in callback
 
 	// URL overrides for testing (empty means use package-level constants)
 	githubAuthorizeURL  string
@@ -53,6 +56,14 @@ type userAuthHandler struct {
 	atlassianTokenURL   string
 	atlassianAuthURL    string
 	atlassianMyselfURL_ string
+}
+
+// autoExecResult holds the outcome of auto-executing the original /jira command
+// after the OAuth flow completes.
+type autoExecResult struct {
+	Attempted bool   // whether auto-execution was attempted
+	Success   bool   // whether execution succeeded
+	Error     string // error message on failure
 }
 
 func (h *userAuthHandler) getGitHubAuthorizeURL() string {
@@ -151,8 +162,19 @@ func (h *userAuthHandler) handleAuthorize(w http.ResponseWriter, req *http.Reque
 	// Read optional return_to query parameter
 	returnTo := req.URL.Query().Get("return_to")
 
+	// Read optional comment_id (uint64) and installation_id (int64) query parameters.
+	// Invalid or missing values are treated as zero (omitted from cookie via omitempty).
+	var commentID uint64
+	if raw := req.URL.Query().Get("comment_id"); raw != "" {
+		commentID, _ = strconv.ParseUint(raw, 10, 64)
+	}
+	var installationID int64
+	if raw := req.URL.Query().Get("installation_id"); raw != "" {
+		installationID, _ = strconv.ParseInt(raw, 10, 64)
+	}
+
 	// Store state and return_to in a signed JSON cookie
-	payload := cookiePayload{State: state, ReturnTo: returnTo}
+	payload := cookiePayload{State: state, ReturnTo: returnTo, CommentID: commentID, InstallationID: installationID}
 	signed := signedCookiePayload(payload, h.cookieSecret, time.Now())
 	http.SetCookie(w, &http.Cookie{
 		Name:     userAuthSessionCookie,
@@ -224,8 +246,14 @@ func (h *userAuthHandler) handleGitHubCallback(w http.ResponseWriter, req *http.
 		return
 	}
 
-	// Store the login in a signed cookie, preserving ReturnTo from the original payload
-	updatedPayload := cookiePayload{State: stateParam, Login: login, ReturnTo: existingPayload.ReturnTo}
+	// Store the login in a signed cookie, preserving ReturnTo, CommentID, and InstallationID from the original payload
+	updatedPayload := cookiePayload{
+		State:          stateParam,
+		Login:          login,
+		ReturnTo:       existingPayload.ReturnTo,
+		CommentID:      existingPayload.CommentID,
+		InstallationID: existingPayload.InstallationID,
+	}
 	signed := signedCookiePayload(updatedPayload, h.cookieSecret, time.Now())
 	http.SetCookie(w, &http.Cookie{
 		Name:     userAuthSessionCookie,
@@ -341,7 +369,65 @@ func (h *userAuthHandler) handleAtlassianCallback(w http.ResponseWriter, req *ht
 	})
 
 	log.Info("User authorization complete", "login", login, "cloud_id", cloudID)
-	renderUserAuthSuccess(w, login, returnTo, h.githubRedirectBaseURL, h.redirectDelaySec)
+
+	// Auto-execution: if the cookie carried comment context, attempt to run
+	// the original /jira command now that we have a valid token.
+	commentID := payload.CommentID
+	installationID := payload.InstallationID
+
+	if commentID == 0 || installationID == 0 {
+		renderUserAuthSuccess(w, login, returnTo, h.githubRedirectBaseURL, h.redirectDelaySec, nil)
+		return
+	}
+
+	// Need the GitHubClient to fetch the comment
+	if h.state == nil || h.state.GitHubClient == nil {
+		log.Warn("Auto-execution skipped: GitHubClient is nil", "login", login, "comment_id", commentID)
+		renderUserAuthSuccess(w, login, returnTo, h.githubRedirectBaseURL, h.redirectDelaySec, nil)
+		return
+	}
+
+	// Fetch the original comment from GitHub API with a 15-second timeout
+	fetchCtx, fetchCancel := context.WithTimeout(req.Context(), 15*time.Second)
+	defer fetchCancel()
+
+	issueComment, err := h.state.GitHubClient.FetchComment(fetchCtx, installationID, commentID)
+	if err != nil {
+		log.Error("Auto-execution skipped: failed to fetch comment", "error", err, "login", login, "comment_id", commentID)
+		renderUserAuthSuccess(w, login, returnTo, h.githubRedirectBaseURL, h.redirectDelaySec, nil)
+		return
+	}
+
+	// Check that the comment body starts with /jira
+	if !strings.HasPrefix(issueComment.Comment.Body, "/jira") {
+		log.Info("Auto-execution skipped: comment does not start with /jira", "login", login, "comment_id", commentID)
+		renderUserAuthSuccess(w, login, returnTo, h.githubRedirectBaseURL, h.redirectDelaySec, nil)
+		return
+	}
+
+	// Check for duplicate marker in the issue body
+	if strings.Contains(issueComment.Issue.Body, "<!--JIRA_BOT_ISSUE") {
+		log.Info("Auto-execution skipped: duplicate marker present", "login", login, "comment_id", commentID)
+		renderUserAuthSuccess(w, login, returnTo, h.githubRedirectBaseURL, h.redirectDelaySec, nil)
+		return
+	}
+
+	// Invoke executor with a 30-second timeout
+	execCtx, execCancel := context.WithTimeout(req.Context(), 30*time.Second)
+	defer execCancel()
+
+	autoExec := &autoExecResult{
+		Attempted: true,
+	}
+	if err := executor.Run(execCtx, h.state, issueComment); err != nil {
+		log.Error("Auto-execution failed", "error", err, "login", login, "comment_id", commentID)
+		autoExec.Error = err.Error()
+	} else {
+		log.Info("Auto-execution succeeded", "login", login, "comment_id", commentID)
+		autoExec.Success = true
+	}
+
+	renderUserAuthSuccess(w, login, returnTo, h.githubRedirectBaseURL, h.redirectDelaySec, autoExec)
 }
 
 // exchangeGitHubCode exchanges a GitHub OAuth authorization code for a user
@@ -506,11 +592,28 @@ You can close this page and try the authorization flow again from your GitHub is
 // renderUserAuthSuccess renders the success page after completing the user
 // authorization flow. When returnTo starts with "/", it renders a meta-refresh
 // redirect to githubBaseURL+returnTo. Otherwise it renders a generic success message.
-func renderUserAuthSuccess(w http.ResponseWriter, login, returnTo, githubBaseURL string, delaySec int) {
+// The autoExec parameter (nil means not attempted) adds Jira issue creation
+// results to the page when auto-execution was performed.
+func renderUserAuthSuccess(w http.ResponseWriter, login, returnTo, githubBaseURL string, delaySec int, autoExec *autoExecResult) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 
 	if delaySec <= 0 {
 		delaySec = 3
+	}
+
+	// Build auto-execution result HTML snippet
+	var autoExecHTML string
+	if autoExec != nil && autoExec.Attempted {
+		if autoExec.Success {
+			autoExecHTML = `<p style="background: #e3f2fd; padding: 12px; border-radius: 4px;">
+&#127881; Jira issue created successfully. Check the GitHub issue for details.
+</p>`
+		} else if autoExec.Error != "" {
+			autoExecHTML = fmt.Sprintf(`<p style="background: #fff3e0; padding: 12px; border-radius: 4px;">
+&#9888; Could not auto-create Jira issue: %s<br>
+Please return to your GitHub issue and retry the command manually.
+</p>`, autoExec.Error)
+		}
 	}
 
 	if strings.HasPrefix(returnTo, "/") {
@@ -524,11 +627,11 @@ func renderUserAuthSuccess(w http.ResponseWriter, login, returnTo, githubBaseURL
 <body style="font-family: system-ui, sans-serif; max-width: 600px; margin: 40px auto; padding: 0 20px;">
 <h1 style="color: #2e7d32;">&#10004; Authorization Complete</h1>
 <p>Your Atlassian account has been linked to your GitHub identity (<strong>%s</strong>).</p>
-<p style="background: #e8f5e9; padding: 12px; border-radius: 4px;">
+%s<p style="background: #e8f5e9; padding: 12px; border-radius: 4px;">
 Redirecting you back... <a href="%s">Click here</a> if you are not redirected automatically.
 </p>
 </body>
-</html>`, delaySec, redirectURL, login, redirectURL)
+</html>`, delaySec, redirectURL, login, autoExecHTML, redirectURL)
 	} else {
 		fmt.Fprintf(w, `<!DOCTYPE html>
 <html>
@@ -536,10 +639,10 @@ Redirecting you back... <a href="%s">Click here</a> if you are not redirected au
 <body style="font-family: system-ui, sans-serif; max-width: 600px; margin: 40px auto; padding: 0 20px;">
 <h1 style="color: #2e7d32;">&#10004; Authorization Complete</h1>
 <p>Your Atlassian account has been linked to your GitHub identity (<strong>%s</strong>).</p>
-<p style="background: #e8f5e9; padding: 12px; border-radius: 4px;">
+%s<p style="background: #e8f5e9; padding: 12px; border-radius: 4px;">
 Return to your GitHub issue or PR and retry the command.
 </p>
 </body>
-</html>`, login)
+</html>`, login, autoExecHTML)
 	}
 }

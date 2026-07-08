@@ -21,6 +21,7 @@ type GitHubClientInterface interface {
 	ReactWithConfused(ctx context.Context, installationID int64, issueComment *github.IssueComment) error
 	PostComment(ctx context.Context, installationID int64, issueComment *github.IssueComment, body string) error
 	UpdateIssueDescription(ctx context.Context, installationID int64, issueComment *github.IssueComment, body string) error
+	FetchComment(ctx context.Context, installationID int64, commentID uint64) (*github.IssueComment, error)
 }
 
 // JiraClientInterface defines the methods used by the executor to interact with

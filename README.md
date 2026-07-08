@@ -9,7 +9,7 @@ When a user runs `/jira create` for the first time, the bot replies with an auth
 1. **GitHub OAuth** — confirms the user's GitHub identity (uses the GitHub App's user-to-server OAuth).
 2. **Atlassian OAuth** — the user grants the bot access to their Jira account.
 
-After authorization, the bot stores the user's Jira tokens in a Kubernetes Secret. On subsequent `/jira create` commands, the bot uses the stored tokens to create issues under that user's Jira identity — no re-authorization needed.
+After authorization, the bot automatically executes the original `/jira create` command and shows the result on the success page — no need to go back and re-type it. The user's Jira tokens are stored in a Kubernetes Secret for future use. On subsequent `/jira create` commands, the bot uses the stored tokens to create issues under that user's Jira identity — no re-authorization needed.
 
 Tokens are refreshed proactively in the background by a leader pod, so they stay valid without user intervention. If a token becomes permanently invalid (e.g., the user revokes access), the bot prompts the user to re-authorize.
 
@@ -182,8 +182,8 @@ From the user's perspective:
 1. User comments `/jira create` on a GitHub issue.
 2. If the bot doesn't have tokens for that user, it replies with an authorization link.
 3. User clicks the link → authenticates with GitHub (confirms identity) → authorizes with Atlassian (grants Jira access).
-4. Bot stores the user's tokens and shows a success page.
-5. User returns to the issue and runs `/jira create` again — the issue is created under their Jira identity.
+4. Bot stores the user's tokens, automatically executes the original `/jira create` command, and shows a success page with a link to the created Jira issue.
+5. On subsequent `/jira create` commands, the bot uses the stored tokens directly — no re-authorization needed.
 
 If a user's token becomes invalid (revoked or expired beyond recovery), the bot posts a new authorization link on the next `/jira create` attempt.
 

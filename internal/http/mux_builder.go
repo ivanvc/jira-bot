@@ -34,6 +34,7 @@ func BuildMux(state *common.State) *http.ServeMux {
 			cookieSecret:          state.Config.GitHubAppClientSecret,
 			githubRedirectBaseURL: state.Config.GitHubRedirectBaseURL,
 			redirectDelaySec:      state.Config.RedirectDelaySec,
+			state:                 state,
 		}
 		mux.HandleFunc("/oauth/authorize", handler.handleAuthorize)
 		mux.HandleFunc("/oauth/github/callback", handler.handleGitHubCallback)

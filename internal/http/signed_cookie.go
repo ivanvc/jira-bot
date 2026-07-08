@@ -14,9 +14,11 @@ import (
 
 // cookiePayload is the JSON structure stored in the signed session cookie.
 type cookiePayload struct {
-	State    string `json:"s"`           // CSRF state token
-	Login    string `json:"l,omitempty"` // GitHub login (set after GitHub callback)
-	ReturnTo string `json:"r,omitempty"` // return path (e.g., "/org/repo/issues/42")
+	State          string `json:"s"`           // CSRF state token
+	Login          string `json:"l,omitempty"` // GitHub login (set after GitHub callback)
+	ReturnTo       string `json:"r,omitempty"` // return path (e.g., "/org/repo/issues/42")
+	CommentID      uint64 `json:"c,omitempty"` // originating comment ID
+	InstallationID int64  `json:"i,omitempty"` // GitHub App installation ID
 }
 
 // signedCookiePayload marshals a cookiePayload to JSON, then signs it using
