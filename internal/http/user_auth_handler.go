@@ -44,9 +44,9 @@ type userAuthHandler struct {
 	atlCallbackURL        string
 	cloudID               string
 	store                 common.UserTokenStore
-	cookieSecret          string // HMAC secret for signed cookies (uses githubAppClientSecret)
-	githubRedirectBaseURL string // Base URL prepended to stored path for post-OAuth redirect
-	redirectDelaySec      int    // Seconds before auto-redirect on success page
+	cookieSecret          string        // HMAC secret for signed cookies (uses githubAppClientSecret)
+	githubRedirectBaseURL string        // Base URL prepended to stored path for post-OAuth redirect
+	redirectDelaySec      int           // Seconds before auto-redirect on success page
 	state                 *common.State // Full application state for auto-execution in callback
 
 	// URL overrides for testing (empty means use package-level constants)

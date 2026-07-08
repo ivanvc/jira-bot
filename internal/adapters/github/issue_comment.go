@@ -4,7 +4,7 @@ import "encoding/json"
 
 // IssueComment holds the comment received.
 type IssueComment struct {
-	Action       string       `json:"action"`
+	Action       string `json:"action"`
 	Issue        `json:"issue"`
 	Comment      `json:"comment"`
 	Installation Installation `json:"installation"`

@@ -16,8 +16,8 @@ import (
 
 // Sentinel errors for UserTokenStore operations.
 var (
-	ErrUserTokenNotFound    = errors.New("user token entry not found")
-	ErrUserTokenMalformed   = errors.New("malformed user token entry")
+	ErrUserTokenNotFound  = errors.New("user token entry not found")
+	ErrUserTokenMalformed = errors.New("malformed user token entry")
 )
 
 // UserTokenEntry represents a single user's stored Atlassian OAuth token data.

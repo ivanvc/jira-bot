@@ -666,9 +666,9 @@ func TestHelpText_ShowsFieldsSectionWhenFieldsConfigured(t *testing.T) {
 			JiraDefaultProject:   "GLOBAL-PROJ",
 			JiraDefaultIssueType: "Task",
 		},
-		GitHubClient:     gh,
+		GitHubClient:       gh,
 		JiraClientResolver: &MockJiraClientResolver{Client: jira},
-		RepoConfigLoader: loader,
+		RepoConfigLoader:   loader,
 	}
 	ic := newIssueCommentWithRepo("/jira help", "", "myorg", "myrepo")
 
@@ -696,9 +696,9 @@ func TestHelpText_OmitsFieldsSectionWhenNoFieldsConfigured(t *testing.T) {
 			JiraDefaultProject:   "GLOBAL-PROJ",
 			JiraDefaultIssueType: "Task",
 		},
-		GitHubClient:     gh,
+		GitHubClient:       gh,
 		JiraClientResolver: &MockJiraClientResolver{Client: jira},
-		RepoConfigLoader: loader,
+		RepoConfigLoader:   loader,
 	}
 	ic := newIssueCommentWithRepo("/jira help", "", "myorg", "myrepo")
 
@@ -725,9 +725,9 @@ func TestHelpText_OmitsFieldsSectionWhenFieldsMapEmpty(t *testing.T) {
 			JiraDefaultProject:   "GLOBAL-PROJ",
 			JiraDefaultIssueType: "Task",
 		},
-		GitHubClient:     gh,
+		GitHubClient:       gh,
 		JiraClientResolver: &MockJiraClientResolver{Client: jira},
-		RepoConfigLoader: loader,
+		RepoConfigLoader:   loader,
 	}
 	ic := newIssueCommentWithRepo("/jira help", "", "myorg", "myrepo")
 
@@ -759,9 +759,9 @@ func TestHelpText_OmitsFieldsSectionWhenAllFieldValuesNull(t *testing.T) {
 			JiraDefaultProject:   "GLOBAL-PROJ",
 			JiraDefaultIssueType: "Task",
 		},
-		GitHubClient:     gh,
+		GitHubClient:       gh,
 		JiraClientResolver: &MockJiraClientResolver{Client: jira},
-		RepoConfigLoader: loader,
+		RepoConfigLoader:   loader,
 	}
 	ic := newIssueCommentWithRepo("/jira help", "", "myorg", "myrepo")
 
@@ -790,9 +790,9 @@ func TestHelpText_ShowsOnlyFieldKeyNamesNotValues(t *testing.T) {
 			JiraDefaultProject:   "GLOBAL-PROJ",
 			JiraDefaultIssueType: "Task",
 		},
-		GitHubClient:     gh,
+		GitHubClient:       gh,
 		JiraClientResolver: &MockJiraClientResolver{Client: jira},
-		RepoConfigLoader: loader,
+		RepoConfigLoader:   loader,
 	}
 	ic := newIssueCommentWithRepo("/jira help", "", "myorg", "myrepo")
 
@@ -808,7 +808,6 @@ func TestHelpText_ShowsOnlyFieldKeyNamesNotValues(t *testing.T) {
 	assert.NotContains(t, helpText, "High")
 	assert.NotContains(t, helpText, "secret-value")
 }
-
 
 // --- loadFieldsFromCommand tests ---
 
@@ -1483,8 +1482,8 @@ func TestCreateJiraIssue_OptionsParseCorrectlyWithBodyTextOnSubsequentLines(t *t
 	assert.Equal(t, "CreateIssue", jira.Calls[0].Method)
 
 	// Verify project and type parsed correctly from the first line
-	assert.Equal(t, "ENG", jira.Calls[0].Args[0])  // project
-	assert.Equal(t, "Bug", jira.Calls[0].Args[1])  // type
+	assert.Equal(t, "ENG", jira.Calls[0].Args[0]) // project
+	assert.Equal(t, "Bug", jira.Calls[0].Args[1]) // type
 
 	// Verify the custom description is used (not the issue body)
 	description := jira.Calls[0].Args[3].(string)
@@ -1888,7 +1887,6 @@ func TestTokenizeLine(t *testing.T) {
 		})
 	}
 }
-
 
 // --- extractPath unit tests ---
 

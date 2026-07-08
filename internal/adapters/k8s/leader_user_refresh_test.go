@@ -14,8 +14,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"k8s.io/client-go/kubernetes/fake"
 
-	k8sadapter "github.com/ivanvc/jira-bot/internal/adapters/k8s"
 	"github.com/ivanvc/jira-bot/internal/adapters/jira"
+	k8sadapter "github.com/ivanvc/jira-bot/internal/adapters/k8s"
 )
 
 // refreshStoreAdapter bridges k8sadapter.K8sUserTokenStore to jira.RefreshTokenStore.
