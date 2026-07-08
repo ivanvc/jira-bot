@@ -136,47 +136,17 @@ func (c *Client) UpdateIssueDescription(ctx context.Context, installationID int6
 }
 
 // FetchComment fetches a comment by ID from the GitHub API using the given
-// installation, then fetches the parent issue to construct a full IssueComment.
-func (c *Client) FetchComment(ctx context.Context, installationID int64, commentID uint64) (*IssueComment, error) {
+// installation, owner, and repo, then fetches the parent issue to construct a full IssueComment.
+func (c *Client) FetchComment(ctx context.Context, installationID int64, owner, repo string, commentID uint64) (*IssueComment, error) {
 	client, err := c.GetInstallationClient(ctx, installationID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get installation client: %w", err)
 	}
 
-	// The GitHub REST API requires owner/repo to fetch a comment. Since we only
-	// have the comment ID and installation ID, list the installation's repos and
-	// try each until we find the comment.
-	var ghComment *github.IssueComment
-	opts := &github.ListOptions{PerPage: 100}
-	for {
-		repos, resp, err := client.Apps.ListRepos(ctx, opts)
-		if err != nil {
-			return nil, fmt.Errorf("failed to list installation repos: %w", err)
-		}
-
-		for _, repo := range repos.Repositories {
-			owner := repo.GetOwner().GetLogin()
-			name := repo.GetName()
-			comment, _, err := client.Issues.GetComment(ctx, owner, name, int64(commentID))
-			if err == nil {
-				ghComment = comment
-				break
-			}
-			// 404 means the comment doesn't belong to this repo; try next.
-		}
-
-		if ghComment != nil {
-			break
-		}
-
-		if resp.NextPage == 0 {
-			break
-		}
-		opts.Page = resp.NextPage
-	}
-
-	if ghComment == nil {
-		return nil, fmt.Errorf("comment %d not found in any installation repository", commentID)
+	// Fetch the comment directly using the known owner/repo.
+	ghComment, _, err := client.Issues.GetComment(ctx, owner, repo, int64(commentID))
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch comment: %w", err)
 	}
 
 	// Fetch the parent issue using the issue_url from the comment response.
@@ -193,18 +163,6 @@ func (c *Client) FetchComment(ctx context.Context, installationID int64, comment
 	var ghIssue github.Issue
 	if _, err := client.Do(ctx, issueReq, &ghIssue); err != nil {
 		return nil, fmt.Errorf("failed to fetch issue: %w", err)
-	}
-
-	// Extract repository info from the repository_url field on the issue.
-	repoURL := ghIssue.GetRepositoryURL()
-	repoReq, err := client.NewRequest("GET", repoURL, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create repo request: %w", err)
-	}
-
-	var ghRepo github.Repository
-	if _, err := client.Do(ctx, repoReq, &ghRepo); err != nil {
-		return nil, fmt.Errorf("failed to fetch repository: %w", err)
 	}
 
 	// Construct the full IssueComment struct.
@@ -233,10 +191,10 @@ func (c *Client) FetchComment(ctx context.Context, installationID int64, comment
 		},
 		Repository: Repository{
 			Owner: RepositoryOwner{
-				Login: ghRepo.GetOwner().GetLogin(),
+				Login: owner,
 			},
-			Name:     ghRepo.GetName(),
-			FullName: ghRepo.GetFullName(),
+			Name:     repo,
+			FullName: owner + "/" + repo,
 		},
 	}
 

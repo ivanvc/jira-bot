@@ -19,6 +19,8 @@ type cookiePayload struct {
 	ReturnTo       string `json:"r,omitempty"` // return path (e.g., "/org/repo/issues/42")
 	CommentID      uint64 `json:"c,omitempty"` // originating comment ID
 	InstallationID int64  `json:"i,omitempty"` // GitHub App installation ID
+	Owner          string `json:"o,omitempty"` // repository owner (for FetchComment)
+	Repo           string `json:"n,omitempty"` // repository name (for FetchComment)
 }
 
 // signedCookiePayload marshals a cookiePayload to JSON, then signs it using

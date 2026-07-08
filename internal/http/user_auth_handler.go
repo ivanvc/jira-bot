@@ -173,8 +173,12 @@ func (h *userAuthHandler) handleAuthorize(w http.ResponseWriter, req *http.Reque
 		installationID, _ = strconv.ParseInt(raw, 10, 64)
 	}
 
+	// Read optional owner and repo query parameters for FetchComment.
+	owner := req.URL.Query().Get("owner")
+	repo := req.URL.Query().Get("repo")
+
 	// Store state and return_to in a signed JSON cookie
-	payload := cookiePayload{State: state, ReturnTo: returnTo, CommentID: commentID, InstallationID: installationID}
+	payload := cookiePayload{State: state, ReturnTo: returnTo, CommentID: commentID, InstallationID: installationID, Owner: owner, Repo: repo}
 	signed := signedCookiePayload(payload, h.cookieSecret, time.Now())
 	http.SetCookie(w, &http.Cookie{
 		Name:     userAuthSessionCookie,
@@ -246,13 +250,15 @@ func (h *userAuthHandler) handleGitHubCallback(w http.ResponseWriter, req *http.
 		return
 	}
 
-	// Store the login in a signed cookie, preserving ReturnTo, CommentID, and InstallationID from the original payload
+	// Store the login in a signed cookie, preserving ReturnTo, CommentID, InstallationID, Owner, and Repo from the original payload
 	updatedPayload := cookiePayload{
 		State:          stateParam,
 		Login:          login,
 		ReturnTo:       existingPayload.ReturnTo,
 		CommentID:      existingPayload.CommentID,
 		InstallationID: existingPayload.InstallationID,
+		Owner:          existingPayload.Owner,
+		Repo:           existingPayload.Repo,
 	}
 	signed := signedCookiePayload(updatedPayload, h.cookieSecret, time.Now())
 	http.SetCookie(w, &http.Cookie{
@@ -374,8 +380,10 @@ func (h *userAuthHandler) handleAtlassianCallback(w http.ResponseWriter, req *ht
 	// the original /jira command now that we have a valid token.
 	commentID := payload.CommentID
 	installationID := payload.InstallationID
+	owner := payload.Owner
+	repo := payload.Repo
 
-	if commentID == 0 || installationID == 0 {
+	if commentID == 0 || installationID == 0 || owner == "" || repo == "" {
 		renderUserAuthSuccess(w, login, returnTo, h.githubRedirectBaseURL, h.redirectDelaySec, nil)
 		return
 	}
@@ -391,13 +399,12 @@ func (h *userAuthHandler) handleAtlassianCallback(w http.ResponseWriter, req *ht
 	fetchCtx, fetchCancel := context.WithTimeout(req.Context(), 15*time.Second)
 	defer fetchCancel()
 
-	issueComment, err := h.state.GitHubClient.FetchComment(fetchCtx, installationID, commentID)
+	issueComment, err := h.state.GitHubClient.FetchComment(fetchCtx, installationID, owner, repo, commentID)
 	if err != nil {
 		log.Error("Auto-execution skipped: failed to fetch comment", "error", err, "login", login, "comment_id", commentID)
 		renderUserAuthSuccess(w, login, returnTo, h.githubRedirectBaseURL, h.redirectDelaySec, nil)
 		return
 	}
-
 	// Check that the comment body starts with /jira
 	if !strings.HasPrefix(issueComment.Comment.Body, "/jira") {
 		log.Info("Auto-execution skipped: comment does not start with /jira", "login", login, "comment_id", commentID)

@@ -995,7 +995,7 @@ func (m *mockGitHubClientForHandler) UpdateIssueDescription(_ context.Context, _
 	return nil
 }
 
-func (m *mockGitHubClientForHandler) FetchComment(_ context.Context, _ int64, _ uint64) (*github.IssueComment, error) {
+func (m *mockGitHubClientForHandler) FetchComment(_ context.Context, _ int64, _, _ string, _ uint64) (*github.IssueComment, error) {
 	m.calls = append(m.calls, "FetchComment")
 	return m.fetchCommentResult, m.fetchCommentErr
 }
@@ -1093,6 +1093,8 @@ func TestHandleAtlassianCallback_AutoExec_HappyPath(t *testing.T) {
 		Login:          "octocat",
 		CommentID:      12345,
 		InstallationID: 99,
+		Owner:          "org",
+		Repo:           "repo",
 	}
 	signedLogin := signedCookiePayload(loginPayload, "test-cookie-secret", time.Now())
 
@@ -1198,6 +1200,8 @@ func TestHandleAtlassianCallback_AutoExec_DuplicateMarkerPresent(t *testing.T) {
 		Login:          "octocat",
 		CommentID:      12345,
 		InstallationID: 99,
+		Owner:          "org",
+		Repo:           "repo",
 	}
 	signedLogin := signedCookiePayload(loginPayload, "test-cookie-secret", time.Now())
 
@@ -1251,6 +1255,8 @@ func TestHandleAtlassianCallback_AutoExec_NonJiraComment(t *testing.T) {
 		Login:          "octocat",
 		CommentID:      12345,
 		InstallationID: 99,
+		Owner:          "org",
+		Repo:           "repo",
 	}
 	signedLogin := signedCookiePayload(loginPayload, "test-cookie-secret", time.Now())
 
@@ -1304,6 +1310,8 @@ func TestHandleAtlassianCallback_AutoExec_GitHubAPIFailure(t *testing.T) {
 		Login:          "octocat",
 		CommentID:      12345,
 		InstallationID: 99,
+		Owner:          "org",
+		Repo:           "repo",
 	}
 	signedLogin := signedCookiePayload(loginPayload, "test-cookie-secret", time.Now())
 
@@ -1352,6 +1360,8 @@ func TestHandleAtlassianCallback_AutoExec_NilGitHubClient(t *testing.T) {
 		Login:          "octocat",
 		CommentID:      12345,
 		InstallationID: 99,
+		Owner:          "org",
+		Repo:           "repo",
 	}
 	signedLogin := signedCookiePayload(loginPayload, "test-cookie-secret", time.Now())
 
@@ -1406,6 +1416,8 @@ func TestHandleAtlassianCallback_AutoExec_ExecutorError(t *testing.T) {
 		Login:          "octocat",
 		CommentID:      12345,
 		InstallationID: 99,
+		Owner:          "org",
+		Repo:           "repo",
 	}
 	signedLogin := signedCookiePayload(loginPayload, "test-cookie-secret", time.Now())
 
