@@ -100,7 +100,13 @@ func tokenizeLine(input string) []string {
 }
 
 // Run executes the webhook and takes action if required.
-func Run(ctx context.Context, state *common.State, issueComment *github.IssueComment) error {
+func Run(ctx context.Context, state *common.State, issueComment *github.IssueComment, editCommentID ...int64) error {
+	// Extract the edit comment ID if provided and non-zero.
+	var editID int64
+	if len(editCommentID) > 0 && editCommentID[0] != 0 {
+		editID = editCommentID[0]
+	}
+
 	if !strings.HasPrefix(issueComment.Comment.Body, "/jira") {
 		return nil
 	}
@@ -129,13 +135,17 @@ func Run(ctx context.Context, state *common.State, issueComment *github.IssueCom
 			return err
 		}
 	case "create":
-		if _, err := createJiraIssue(ctx, state, issueComment, parts[2:]); err != nil {
+		if _, err := createJiraIssue(ctx, state, issueComment, parts[2:], editID); err != nil {
 			if errors.Is(err, errAlreadyCreated) {
 				return nil
 			}
 			state.GitHubClient.ReactWithConfused(ctx, issueComment.Installation.ID, issueComment)
 			errorMsg := fmt.Sprintf(errorMessageFormat, err)
-			state.GitHubClient.PostComment(ctx, issueComment.Installation.ID, issueComment, errorMsg)
+			if editID != 0 {
+				state.GitHubClient.EditComment(ctx, issueComment.Installation.ID, issueComment.Repository.Owner.Login, issueComment.Repository.Name, editID, errorMsg)
+			} else {
+				state.GitHubClient.PostComment(ctx, issueComment.Installation.ID, issueComment, errorMsg)
+			}
 
 			return err
 		}
@@ -181,7 +191,7 @@ func replyWithHelp(ctx context.Context, state *common.State, issueComment *githu
 	return state.GitHubClient.PostComment(ctx, issueComment.Installation.ID, issueComment, helpText)
 }
 
-func createJiraIssue(ctx context.Context, state *common.State, issueComment *github.IssueComment, options []string) (string, error) {
+func createJiraIssue(ctx context.Context, state *common.State, issueComment *github.IssueComment, options []string, editCommentID int64) (string, error) {
 	// Separate title tokens from option tokens.
 	var titleTokens []string
 	var optionTokens []string
@@ -298,8 +308,15 @@ func createJiraIssue(ctx context.Context, state *common.State, issueComment *git
 		return "", err
 	}
 
-	if err := state.GitHubClient.PostComment(ctx, issueComment.Installation.ID, issueComment, fmt.Sprintf(successTextFormat, key)); err != nil {
-		return "", err
+	successMsg := fmt.Sprintf(successTextFormat, key)
+	if editCommentID != 0 {
+		if err := state.GitHubClient.EditComment(ctx, issueComment.Installation.ID, issueComment.Repository.Owner.Login, issueComment.Repository.Name, editCommentID, successMsg); err != nil {
+			return "", err
+		}
+	} else {
+		if err := state.GitHubClient.PostComment(ctx, issueComment.Installation.ID, issueComment, successMsg); err != nil {
+			return "", err
+		}
 	}
 
 	return key, nil
@@ -342,7 +359,7 @@ func resolveJiraClient(ctx context.Context, state *common.State, issueComment *g
 			u.RawQuery = q.Encode()
 			authLink = u.String()
 		}
-		authMsg := fmt.Sprintf(":lock: You need to authorize the bot with your Jira account before creating issues. Please [authorize here](%s) and try again.", authLink)
+		authMsg := fmt.Sprintf(":lock: You need to authorize the bot with your Jira account before creating issues. Please [authorize here](%s) and try again.\n\n<!--JIRA_BOT_AUTH_PENDING-->", authLink)
 		if err := state.GitHubClient.PostComment(ctx, issueComment.Installation.ID, issueComment, authMsg); err != nil {
 			return nil, err
 		}

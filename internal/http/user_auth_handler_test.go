@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	gogithub "github.com/google/go-github/v58/github"
 	"github.com/ivanvc/jira-bot/internal/adapters/github"
 	"github.com/ivanvc/jira-bot/internal/common"
 	"github.com/stretchr/testify/assert"
@@ -973,6 +974,16 @@ type mockGitHubClientForHandler struct {
 	fetchCommentResult *github.IssueComment
 	fetchCommentErr    error
 	calls              []string
+
+	// ListIssueComments configurable return values
+	ListCommentsResult []*gogithub.IssueComment
+	ListCommentsErr    error
+
+	// EditComment tracking
+	EditCommentErr    error
+	EditCommentCalled bool
+	EditCommentBody   string
+	EditCommentID     int64
 }
 
 func (m *mockGitHubClientForHandler) ReactWithThumbsUp(_ context.Context, _ int64, _ *github.IssueComment) error {
@@ -998,6 +1009,19 @@ func (m *mockGitHubClientForHandler) UpdateIssueDescription(_ context.Context, _
 func (m *mockGitHubClientForHandler) FetchComment(_ context.Context, _ int64, _, _ string, _ uint64) (*github.IssueComment, error) {
 	m.calls = append(m.calls, "FetchComment")
 	return m.fetchCommentResult, m.fetchCommentErr
+}
+
+func (m *mockGitHubClientForHandler) EditComment(_ context.Context, _ int64, _, _ string, commentID int64, body string) error {
+	m.calls = append(m.calls, "EditComment")
+	m.EditCommentCalled = true
+	m.EditCommentBody = body
+	m.EditCommentID = commentID
+	return m.EditCommentErr
+}
+
+func (m *mockGitHubClientForHandler) ListIssueComments(_ context.Context, _ int64, _, _ string, _ int) ([]*gogithub.IssueComment, error) {
+	m.calls = append(m.calls, "ListIssueComments")
+	return m.ListCommentsResult, m.ListCommentsErr
 }
 
 // mockJiraClientForHandler implements common.JiraClientInterface for handler tests.
@@ -1439,4 +1463,361 @@ func TestHandleAtlassianCallback_AutoExec_ExecutorError(t *testing.T) {
 	assert.Contains(t, body, "Could not auto-create Jira issue")
 	assert.Contains(t, body, "Jira API unavailable")
 	assert.NotContains(t, body, "PROJ-")
+}
+
+func TestParseIssueNumberFromCommentsURL(t *testing.T) {
+	tests := []struct {
+		name    string
+		url     string
+		wantNum int
+		wantErr bool
+	}{
+		{
+			name:    "valid URL",
+			url:     "https://api.github.com/repos/octocat/hello-world/issues/42/comments",
+			wantNum: 42,
+		},
+		{
+			name:    "valid URL with issue number 1",
+			url:     "https://api.github.com/repos/owner/repo/issues/1/comments",
+			wantNum: 1,
+		},
+		{
+			name:    "valid URL with large issue number",
+			url:     "https://api.github.com/repos/org/project/issues/99999/comments",
+			wantNum: 99999,
+		},
+		{
+			name:    "no comments segment",
+			url:     "https://api.github.com/repos/owner/repo/issues/42",
+			wantErr: true,
+		},
+		{
+			name:    "comments at start (no preceding segment)",
+			url:     "comments",
+			wantErr: true,
+		},
+		{
+			name:    "empty string",
+			url:     "",
+			wantErr: true,
+		},
+		{
+			name:    "non-numeric segment before comments",
+			url:     "https://api.github.com/repos/owner/repo/issues/abc/comments",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			num, err := parseIssueNumberFromCommentsURL(tt.url)
+			if tt.wantErr {
+				assert.Error(t, err)
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, tt.wantNum, num)
+			}
+		})
+	}
+}
+
+// newTestIssueCommentWithCommentsURL builds a github.IssueComment with a CommentsURL
+// for testing the marker search logic in handleAtlassianCallback.
+func newTestIssueCommentWithCommentsURL(commentBody, issueBody, commentsURL string) *github.IssueComment {
+	return &github.IssueComment{
+		Action: "created",
+		Issue: github.Issue{
+			Title:       "Test Issue",
+			Body:        issueBody,
+			HTMLURL:     "https://github.com/org/repo/issues/42",
+			CommentsURL: commentsURL,
+		},
+		Comment: github.Comment{
+			Body:   commentBody,
+			NodeID: "node123",
+			ID:     12345,
+			User:   github.CommentUser{Login: "octocat"},
+		},
+		Installation: github.Installation{ID: 99},
+		Repository: github.Repository{
+			Owner:    github.RepositoryOwner{Login: "org"},
+			Name:     "repo",
+			FullName: "org/repo",
+		},
+	}
+}
+
+// TestHandleAtlassianCallback_MarkerSearch_Found tests that when
+// ListIssueComments returns a comment containing the auth pending marker,
+// the editCommentID is passed to executor.Run (resulting in EditComment being called).
+// Validates: Requirements 4.1, 4.2
+func TestHandleAtlassianCallback_MarkerSearch_Found(t *testing.T) {
+	atlTokenServer := atlTokenServerForAutoExec(t)
+	defer atlTokenServer.Close()
+
+	store := newMockUserTokenStore()
+
+	markerCommentID := int64(777)
+	markerBody := "🔒 Please [authorize here](https://example.com/oauth) and try again.\n\n<!--JIRA_BOT_AUTH_PENDING-->"
+
+	ghClient := &mockGitHubClientForHandler{
+		fetchCommentResult: newTestIssueCommentWithCommentsURL(
+			"/jira create",
+			"Clean issue body",
+			"https://api.github.com/repos/org/repo/issues/42/comments",
+		),
+		ListCommentsResult: []*gogithub.IssueComment{
+			{ID: gogithub.Int64(100), Body: gogithub.String("Some unrelated comment")},
+			{ID: gogithub.Int64(markerCommentID), Body: gogithub.String(markerBody)},
+			{ID: gogithub.Int64(200), Body: gogithub.String("Another comment")},
+		},
+	}
+	jiraClient := &mockJiraClientForHandler{returnKey: "PROJ-99"}
+
+	handlerState := &common.State{
+		Config: common.Config{
+			JiraDefaultProject:   "DEFAULT",
+			JiraDefaultIssueType: "Task",
+		},
+		GitHubClient:       ghClient,
+		JiraClientResolver: &mockJiraClientResolverForHandler{client: jiraClient},
+	}
+
+	handler := newTestAuthHandler(store)
+	handler.atlassianTokenURL = atlTokenServer.URL
+	handler.state = handlerState
+
+	loginPayload := cookiePayload{
+		State:          "somestate",
+		Login:          "octocat",
+		CommentID:      12345,
+		InstallationID: 99,
+		Owner:          "org",
+		Repo:           "repo",
+	}
+	signedLogin := signedCookiePayload(loginPayload, "test-cookie-secret", time.Now())
+
+	req := httptest.NewRequest(http.MethodGet, "/oauth/atlassian/callback?code=test-auth-code", nil)
+	req.AddCookie(&http.Cookie{
+		Name:  userAuthSessionCookie,
+		Value: signedLogin,
+	})
+	rec := httptest.NewRecorder()
+
+	handler.handleAtlassianCallback(rec, req)
+
+	result := rec.Result()
+	defer result.Body.Close()
+
+	assert.Equal(t, http.StatusOK, result.StatusCode)
+	body := rec.Body.String()
+	assert.Contains(t, body, "Authorization Complete")
+	assert.Contains(t, body, "Jira issue created successfully")
+
+	// Verify EditComment was called with the marker comment's ID
+	assert.True(t, ghClient.EditCommentCalled, "EditComment should be called when marker is found")
+	assert.Equal(t, markerCommentID, ghClient.EditCommentID, "EditComment should be called with the marker comment ID")
+}
+
+// TestHandleAtlassianCallback_MarkerSearch_NotFound tests that when
+// ListIssueComments returns comments without the auth pending marker,
+// executor.Run is called without editCommentID (PostComment is called instead).
+// Validates: Requirements 4.3
+func TestHandleAtlassianCallback_MarkerSearch_NotFound(t *testing.T) {
+	atlTokenServer := atlTokenServerForAutoExec(t)
+	defer atlTokenServer.Close()
+
+	store := newMockUserTokenStore()
+
+	ghClient := &mockGitHubClientForHandler{
+		fetchCommentResult: newTestIssueCommentWithCommentsURL(
+			"/jira create",
+			"Clean issue body",
+			"https://api.github.com/repos/org/repo/issues/42/comments",
+		),
+		ListCommentsResult: []*gogithub.IssueComment{
+			{ID: gogithub.Int64(100), Body: gogithub.String("Some unrelated comment")},
+			{ID: gogithub.Int64(200), Body: gogithub.String("Another comment without the marker")},
+		},
+	}
+	jiraClient := &mockJiraClientForHandler{returnKey: "PROJ-100"}
+
+	handlerState := &common.State{
+		Config: common.Config{
+			JiraDefaultProject:   "DEFAULT",
+			JiraDefaultIssueType: "Task",
+		},
+		GitHubClient:       ghClient,
+		JiraClientResolver: &mockJiraClientResolverForHandler{client: jiraClient},
+	}
+
+	handler := newTestAuthHandler(store)
+	handler.atlassianTokenURL = atlTokenServer.URL
+	handler.state = handlerState
+
+	loginPayload := cookiePayload{
+		State:          "somestate",
+		Login:          "octocat",
+		CommentID:      12345,
+		InstallationID: 99,
+		Owner:          "org",
+		Repo:           "repo",
+	}
+	signedLogin := signedCookiePayload(loginPayload, "test-cookie-secret", time.Now())
+
+	req := httptest.NewRequest(http.MethodGet, "/oauth/atlassian/callback?code=test-auth-code", nil)
+	req.AddCookie(&http.Cookie{
+		Name:  userAuthSessionCookie,
+		Value: signedLogin,
+	})
+	rec := httptest.NewRecorder()
+
+	handler.handleAtlassianCallback(rec, req)
+
+	result := rec.Result()
+	defer result.Body.Close()
+
+	assert.Equal(t, http.StatusOK, result.StatusCode)
+	body := rec.Body.String()
+	assert.Contains(t, body, "Authorization Complete")
+	assert.Contains(t, body, "Jira issue created successfully")
+
+	// Verify EditComment was NOT called (PostComment path taken instead)
+	assert.False(t, ghClient.EditCommentCalled, "EditComment should NOT be called when marker is not found")
+}
+
+// TestHandleAtlassianCallback_MarkerSearch_ListCommentsError tests that when
+// ListIssueComments returns an error, the handler falls back gracefully and
+// calls executor.Run without editCommentID (PostComment is used).
+// Validates: Requirements 4.3
+func TestHandleAtlassianCallback_MarkerSearch_ListCommentsError(t *testing.T) {
+	atlTokenServer := atlTokenServerForAutoExec(t)
+	defer atlTokenServer.Close()
+
+	store := newMockUserTokenStore()
+
+	ghClient := &mockGitHubClientForHandler{
+		fetchCommentResult: newTestIssueCommentWithCommentsURL(
+			"/jira create",
+			"Clean issue body",
+			"https://api.github.com/repos/org/repo/issues/42/comments",
+		),
+		ListCommentsErr: fmt.Errorf("GitHub API rate limited"),
+	}
+	jiraClient := &mockJiraClientForHandler{returnKey: "PROJ-101"}
+
+	handlerState := &common.State{
+		Config: common.Config{
+			JiraDefaultProject:   "DEFAULT",
+			JiraDefaultIssueType: "Task",
+		},
+		GitHubClient:       ghClient,
+		JiraClientResolver: &mockJiraClientResolverForHandler{client: jiraClient},
+	}
+
+	handler := newTestAuthHandler(store)
+	handler.atlassianTokenURL = atlTokenServer.URL
+	handler.state = handlerState
+
+	loginPayload := cookiePayload{
+		State:          "somestate",
+		Login:          "octocat",
+		CommentID:      12345,
+		InstallationID: 99,
+		Owner:          "org",
+		Repo:           "repo",
+	}
+	signedLogin := signedCookiePayload(loginPayload, "test-cookie-secret", time.Now())
+
+	req := httptest.NewRequest(http.MethodGet, "/oauth/atlassian/callback?code=test-auth-code", nil)
+	req.AddCookie(&http.Cookie{
+		Name:  userAuthSessionCookie,
+		Value: signedLogin,
+	})
+	rec := httptest.NewRecorder()
+
+	handler.handleAtlassianCallback(rec, req)
+
+	result := rec.Result()
+	defer result.Body.Close()
+
+	assert.Equal(t, http.StatusOK, result.StatusCode)
+	body := rec.Body.String()
+	assert.Contains(t, body, "Authorization Complete")
+	assert.Contains(t, body, "Jira issue created successfully")
+
+	// Verify EditComment was NOT called (graceful fallback to PostComment)
+	assert.False(t, ghClient.EditCommentCalled, "EditComment should NOT be called when ListIssueComments fails")
+}
+
+// TestHandleAtlassianCallback_MarkerSearch_ParseCommentsURLFails tests that when
+// parseIssueNumberFromCommentsURL fails (e.g., CommentsURL is empty or malformed),
+// the handler falls back gracefully and calls executor.Run without editCommentID.
+// Validates: Requirements 4.1, 4.3
+func TestHandleAtlassianCallback_MarkerSearch_ParseCommentsURLFails(t *testing.T) {
+	atlTokenServer := atlTokenServerForAutoExec(t)
+	defer atlTokenServer.Close()
+
+	store := newMockUserTokenStore()
+
+	ghClient := &mockGitHubClientForHandler{
+		fetchCommentResult: newTestIssueCommentWithCommentsURL(
+			"/jira create",
+			"Clean issue body",
+			"https://api.github.com/repos/org/repo/issues/42", // missing /comments suffix
+		),
+		ListCommentsResult: []*gogithub.IssueComment{
+			// These should never be reached since URL parsing fails first
+			{ID: gogithub.Int64(777), Body: gogithub.String("<!--JIRA_BOT_AUTH_PENDING-->")},
+		},
+	}
+	jiraClient := &mockJiraClientForHandler{returnKey: "PROJ-102"}
+
+	handlerState := &common.State{
+		Config: common.Config{
+			JiraDefaultProject:   "DEFAULT",
+			JiraDefaultIssueType: "Task",
+		},
+		GitHubClient:       ghClient,
+		JiraClientResolver: &mockJiraClientResolverForHandler{client: jiraClient},
+	}
+
+	handler := newTestAuthHandler(store)
+	handler.atlassianTokenURL = atlTokenServer.URL
+	handler.state = handlerState
+
+	loginPayload := cookiePayload{
+		State:          "somestate",
+		Login:          "octocat",
+		CommentID:      12345,
+		InstallationID: 99,
+		Owner:          "org",
+		Repo:           "repo",
+	}
+	signedLogin := signedCookiePayload(loginPayload, "test-cookie-secret", time.Now())
+
+	req := httptest.NewRequest(http.MethodGet, "/oauth/atlassian/callback?code=test-auth-code", nil)
+	req.AddCookie(&http.Cookie{
+		Name:  userAuthSessionCookie,
+		Value: signedLogin,
+	})
+	rec := httptest.NewRecorder()
+
+	handler.handleAtlassianCallback(rec, req)
+
+	result := rec.Result()
+	defer result.Body.Close()
+
+	assert.Equal(t, http.StatusOK, result.StatusCode)
+	body := rec.Body.String()
+	assert.Contains(t, body, "Authorization Complete")
+	assert.Contains(t, body, "Jira issue created successfully")
+
+	// Verify EditComment was NOT called (graceful fallback because URL parse failed)
+	assert.False(t, ghClient.EditCommentCalled, "EditComment should NOT be called when CommentsURL cannot be parsed")
+	// Verify ListIssueComments was NOT called (parse failure skips listing)
+	for _, call := range ghClient.calls {
+		assert.NotEqual(t, "ListIssueComments", call, "ListIssueComments should not be called when CommentsURL parse fails")
+	}
 }

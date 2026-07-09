@@ -135,6 +135,27 @@ func (c *Client) UpdateIssueDescription(ctx context.Context, installationID int6
 	return nil
 }
 
+// EditComment edits an existing issue comment by ID.
+func (c *Client) EditComment(ctx context.Context, installationID int64, owner, repo string, commentID int64, body string) error {
+	client, err := c.GetInstallationClient(ctx, installationID)
+	if err != nil {
+		return err
+	}
+	comment := &github.IssueComment{Body: &body}
+	_, _, err = client.Issues.EditComment(ctx, owner, repo, commentID, comment)
+	return err
+}
+
+// ListIssueComments lists all comments on an issue.
+func (c *Client) ListIssueComments(ctx context.Context, installationID int64, owner, repo string, issueNumber int) ([]*github.IssueComment, error) {
+	client, err := c.GetInstallationClient(ctx, installationID)
+	if err != nil {
+		return nil, err
+	}
+	comments, _, err := client.Issues.ListComments(ctx, owner, repo, issueNumber, nil)
+	return comments, err
+}
+
 // FetchComment fetches a comment by ID from the GitHub API using the given
 // installation, owner, and repo, then fetches the parent issue to construct a full IssueComment.
 func (c *Client) FetchComment(ctx context.Context, installationID int64, owner, repo string, commentID uint64) (*IssueComment, error) {

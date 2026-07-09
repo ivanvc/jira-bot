@@ -15,9 +15,26 @@ import (
 	"time"
 
 	"github.com/charmbracelet/log"
+	gogithub "github.com/google/go-github/v58/github"
 	"github.com/ivanvc/jira-bot/internal/common"
 	"github.com/ivanvc/jira-bot/internal/executor"
 )
+
+// authPendingMarker is the HTML comment embedded in the auth link comment
+// so the callback handler can find it later for in-place editing.
+const authPendingMarker = "<!--JIRA_BOT_AUTH_PENDING-->"
+
+// findAuthPendingComment searches a slice of GitHub issue comments for one
+// whose body contains the auth pending marker. Returns the comment ID if found,
+// or 0 if not found.
+func findAuthPendingComment(comments []*gogithub.IssueComment) int64 {
+	for _, c := range comments {
+		if strings.Contains(c.GetBody(), authPendingMarker) {
+			return c.GetID()
+		}
+	}
+	return 0
+}
 
 // randRead is a variable for testing (allows deterministic state generation in tests).
 var randRead = rand.Read
@@ -423,15 +440,39 @@ func (h *userAuthHandler) handleAtlassianCallback(w http.ResponseWriter, req *ht
 	execCtx, execCancel := context.WithTimeout(req.Context(), 30*time.Second)
 	defer execCancel()
 
+	// Search for the auth pending marker comment so we can edit it in-place
+	var editCommentID int64
+	issueNumber, parseErr := parseIssueNumberFromCommentsURL(issueComment.Issue.CommentsURL)
+	if parseErr != nil {
+		log.Warn("Could not parse issue number from CommentsURL, will post new comment", "error", parseErr)
+	} else {
+		comments, listErr := h.state.GitHubClient.ListIssueComments(execCtx, installationID, owner, repo, issueNumber)
+		if listErr != nil {
+			log.Warn("Could not list issue comments, will post new comment", "error", listErr)
+		} else {
+			editCommentID = findAuthPendingComment(comments)
+		}
+	}
+
 	autoExec := &autoExecResult{
 		Attempted: true,
 	}
-	if err := executor.Run(execCtx, h.state, issueComment); err != nil {
-		log.Error("Auto-execution failed", "error", err, "login", login, "comment_id", commentID)
-		autoExec.Error = err.Error()
+	if editCommentID != 0 {
+		if err := executor.Run(execCtx, h.state, issueComment, editCommentID); err != nil {
+			log.Error("Auto-execution failed", "error", err, "login", login, "comment_id", commentID)
+			autoExec.Error = err.Error()
+		} else {
+			log.Info("Auto-execution succeeded", "login", login, "comment_id", commentID)
+			autoExec.Success = true
+		}
 	} else {
-		log.Info("Auto-execution succeeded", "login", login, "comment_id", commentID)
-		autoExec.Success = true
+		if err := executor.Run(execCtx, h.state, issueComment); err != nil {
+			log.Error("Auto-execution failed", "error", err, "login", login, "comment_id", commentID)
+			autoExec.Error = err.Error()
+		} else {
+			log.Info("Auto-execution succeeded", "login", login, "comment_id", commentID)
+			autoExec.Success = true
+		}
 	}
 
 	renderUserAuthSuccess(w, login, returnTo, h.githubRedirectBaseURL, h.redirectDelaySec, autoExec)
@@ -594,6 +635,19 @@ You can close this page and try the authorization flow again from your GitHub is
 </p>
 </body>
 </html>`, title, title, message)
+}
+
+// parseIssueNumberFromCommentsURL extracts the issue number from a GitHub API
+// comments URL of the form: https://api.github.com/repos/{owner}/{repo}/issues/{number}/comments
+func parseIssueNumberFromCommentsURL(commentsURL string) (int, error) {
+	// Split on "/" and find the segment before "comments"
+	parts := strings.Split(commentsURL, "/")
+	for i, p := range parts {
+		if p == "comments" && i > 0 {
+			return strconv.Atoi(parts[i-1])
+		}
+	}
+	return 0, fmt.Errorf("cannot parse issue number from URL: %s", commentsURL)
 }
 
 // renderUserAuthSuccess renders the success page after completing the user

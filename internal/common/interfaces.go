@@ -3,6 +3,7 @@ package common
 import (
 	"context"
 
+	gogithub "github.com/google/go-github/v58/github"
 	"github.com/ivanvc/jira-bot/internal/adapters/github"
 	"github.com/ivanvc/jira-bot/internal/adapters/k8s"
 	"github.com/ivanvc/jira-bot/internal/config"
@@ -22,6 +23,8 @@ type GitHubClientInterface interface {
 	PostComment(ctx context.Context, installationID int64, issueComment *github.IssueComment, body string) error
 	UpdateIssueDescription(ctx context.Context, installationID int64, issueComment *github.IssueComment, body string) error
 	FetchComment(ctx context.Context, installationID int64, owner, repo string, commentID uint64) (*github.IssueComment, error)
+	EditComment(ctx context.Context, installationID int64, owner, repo string, commentID int64, body string) error
+	ListIssueComments(ctx context.Context, installationID int64, owner, repo string, issueNumber int) ([]*gogithub.IssueComment, error)
 }
 
 // JiraClientInterface defines the methods used by the executor to interact with

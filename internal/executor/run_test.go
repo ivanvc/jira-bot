@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	gogithub "github.com/google/go-github/v58/github"
 	"github.com/ivanvc/jira-bot/internal/adapters/github"
 	"github.com/ivanvc/jira-bot/internal/common"
 	"github.com/ivanvc/jira-bot/internal/config"
@@ -26,6 +27,15 @@ type MockGitHubClient struct {
 	PostCommentErr error
 	ReactErr       error
 	UpdateErr      error
+
+	// EditComment configurable fields
+	EditCommentErr    error
+	EditCommentCalled bool
+	EditCommentBody   string
+
+	// ListIssueComments configurable fields
+	ListCommentsErr    error
+	ListCommentsResult []*gogithub.IssueComment
 }
 
 func (m *MockGitHubClient) ReactWithThumbsUp(ctx context.Context, installationID int64, issueComment *github.IssueComment) error {
@@ -51,6 +61,18 @@ func (m *MockGitHubClient) UpdateIssueDescription(ctx context.Context, installat
 func (m *MockGitHubClient) FetchComment(ctx context.Context, installationID int64, owner, repo string, commentID uint64) (*github.IssueComment, error) {
 	m.Calls = append(m.Calls, MockCall{Method: "FetchComment", Args: []interface{}{ctx, installationID, owner, repo, commentID}})
 	return nil, nil
+}
+
+func (m *MockGitHubClient) EditComment(ctx context.Context, installationID int64, owner, repo string, commentID int64, body string) error {
+	m.Calls = append(m.Calls, MockCall{Method: "EditComment", Args: []interface{}{ctx, installationID, owner, repo, commentID, body}})
+	m.EditCommentCalled = true
+	m.EditCommentBody = body
+	return m.EditCommentErr
+}
+
+func (m *MockGitHubClient) ListIssueComments(ctx context.Context, installationID int64, owner, repo string, issueNumber int) ([]*gogithub.IssueComment, error) {
+	m.Calls = append(m.Calls, MockCall{Method: "ListIssueComments", Args: []interface{}{ctx, installationID, owner, repo, issueNumber}})
+	return m.ListCommentsResult, m.ListCommentsErr
 }
 
 // MockJiraClient implements common.JiraClientInterface for testing.
@@ -2233,4 +2255,119 @@ func TestResolveJiraClient_AuthLinkCommentContextValuesMatchIssueComment(t *test
 			assert.Contains(t, authBody, expectedInstallationID)
 		})
 	}
+}
+
+// --- 4.3 Executor editCommentID tests ---
+
+func TestRun_EditCommentID_NonZeroSuccess_EditsCommentWithSuccessMessage(t *testing.T) {
+	// Validates: Requirements 5.2
+	// When editCommentID is non-zero and Jira creation succeeds,
+	// EditComment is called with the success message and PostComment is NOT called for the result.
+	gh := &MockGitHubClient{}
+	jira := &MockJiraClient{ReturnKey: "EDIT-101"}
+	state := newTestState(gh, jira)
+	ic := newIssueCommentWithRepo("/jira create", "Issue body", "myorg", "myrepo")
+
+	err := Run(context.Background(), state, ic, 12345)
+
+	require.NoError(t, err)
+	// Jira issue should have been created
+	require.Len(t, jira.Calls, 1)
+	assert.Equal(t, "CreateIssue", jira.Calls[0].Method)
+
+	// EditComment should have been called with the success message
+	assert.True(t, gh.EditCommentCalled, "Expected EditComment to be called")
+	assert.Contains(t, gh.EditCommentBody, "EDIT-101")
+
+	// Verify EditComment was called with correct args (owner, repo, commentID)
+	var editCall *MockCall
+	for i := range gh.Calls {
+		if gh.Calls[i].Method == "EditComment" {
+			editCall = &gh.Calls[i]
+			break
+		}
+	}
+	require.NotNil(t, editCall, "Expected EditComment call in gh.Calls")
+	assert.Equal(t, "myorg", editCall.Args[2])
+	assert.Equal(t, "myrepo", editCall.Args[3])
+	assert.Equal(t, int64(12345), editCall.Args[4])
+
+	// PostComment should NOT have been called for the success message
+	for _, call := range gh.Calls {
+		if call.Method == "PostComment" {
+			body := call.Args[3].(string)
+			assert.NotContains(t, body, "EDIT-101", "PostComment should not contain the success message when editCommentID is provided")
+		}
+	}
+}
+
+func TestRun_EditCommentID_NonZeroFailure_EditsCommentWithErrorMessage(t *testing.T) {
+	// Validates: Requirements 5.3
+	// When editCommentID is non-zero and Jira creation fails,
+	// EditComment is called with the error message.
+	gh := &MockGitHubClient{}
+	jiraErr := errors.New("jira server unavailable")
+	jira := &MockJiraClient{ReturnErr: jiraErr}
+	state := newTestState(gh, jira)
+	ic := newIssueCommentWithRepo("/jira create", "Issue body", "myorg", "myrepo")
+
+	err := Run(context.Background(), state, ic, 99999)
+
+	require.Error(t, err)
+	assert.Equal(t, jiraErr, err)
+
+	// EditComment should have been called with the error message
+	assert.True(t, gh.EditCommentCalled, "Expected EditComment to be called on failure")
+	assert.Contains(t, gh.EditCommentBody, "jira server unavailable")
+
+	// Verify EditComment was called with correct comment ID
+	var editCall *MockCall
+	for i := range gh.Calls {
+		if gh.Calls[i].Method == "EditComment" {
+			editCall = &gh.Calls[i]
+			break
+		}
+	}
+	require.NotNil(t, editCall, "Expected EditComment call in gh.Calls")
+	assert.Equal(t, int64(99999), editCall.Args[4])
+
+	// PostComment should NOT have been called for the error message
+	for _, call := range gh.Calls {
+		if call.Method == "PostComment" {
+			body := call.Args[3].(string)
+			assert.NotContains(t, body, "jira server unavailable", "PostComment should not contain the error message when editCommentID is provided")
+		}
+	}
+}
+
+func TestRun_EditCommentID_Zero_PostsCommentAsUsual(t *testing.T) {
+	// Validates: Requirements 5.4
+	// When editCommentID is zero (or not provided), PostComment is called (existing behavior).
+	gh := &MockGitHubClient{}
+	jira := &MockJiraClient{ReturnKey: "POST-202"}
+	state := newTestState(gh, jira)
+	ic := newIssueCommentWithRepo("/jira create", "Issue body", "myorg", "myrepo")
+
+	err := Run(context.Background(), state, ic, 0)
+
+	require.NoError(t, err)
+	// Jira issue should have been created
+	require.Len(t, jira.Calls, 1)
+	assert.Equal(t, "CreateIssue", jira.Calls[0].Method)
+
+	// EditComment should NOT have been called
+	assert.False(t, gh.EditCommentCalled, "EditComment should not be called when editCommentID is zero")
+
+	// PostComment should have been called with the success message
+	var postCommentFound bool
+	for _, call := range gh.Calls {
+		if call.Method == "PostComment" {
+			body := call.Args[3].(string)
+			if strings.Contains(body, "POST-202") {
+				postCommentFound = true
+				break
+			}
+		}
+	}
+	assert.True(t, postCommentFound, "Expected PostComment to be called with success message when editCommentID is zero")
 }

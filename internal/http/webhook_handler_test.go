@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	gogithub "github.com/google/go-github/v58/github"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/ivanvc/jira-bot/internal/adapters/github"
@@ -52,6 +53,16 @@ func (m *MockGitHubClient) UpdateIssueDescription(ctx context.Context, installat
 
 func (m *MockGitHubClient) FetchComment(ctx context.Context, installationID int64, owner, repo string, commentID uint64) (*github.IssueComment, error) {
 	m.Calls = append(m.Calls, MockCall{Method: "FetchComment", Args: []interface{}{ctx, installationID, owner, repo, commentID}})
+	return nil, nil
+}
+
+func (m *MockGitHubClient) EditComment(ctx context.Context, installationID int64, owner, repo string, commentID int64, body string) error {
+	m.Calls = append(m.Calls, MockCall{Method: "EditComment", Args: []interface{}{ctx, installationID, owner, repo, commentID, body}})
+	return nil
+}
+
+func (m *MockGitHubClient) ListIssueComments(ctx context.Context, installationID int64, owner, repo string, issueNumber int) ([]*gogithub.IssueComment, error) {
+	m.Calls = append(m.Calls, MockCall{Method: "ListIssueComments", Args: []interface{}{ctx, installationID, owner, repo, issueNumber}})
 	return nil, nil
 }
 
