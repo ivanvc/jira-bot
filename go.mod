@@ -7,11 +7,10 @@ toolchain go1.26.4
 require (
 	github.com/andygrunwald/go-jira v1.16.0
 	github.com/charmbracelet/log v0.3.1
-	github.com/golang-jwt/jwt/v4 v4.4.2
+	github.com/golang-jwt/jwt/v4 v4.5.2
 	github.com/google/go-github/v58 v58.0.0
 	github.com/stretchr/testify v1.11.1
 	github.com/trivago/tgo v1.0.7
-	golang.org/x/sync v0.21.0
 	gopkg.in/yaml.v3 v3.0.1
 	k8s.io/api v0.36.2
 	k8s.io/apimachinery v0.36.2
