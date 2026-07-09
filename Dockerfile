@@ -1,5 +1,8 @@
 # Build the manager binary
-FROM golang:1.26 AS builder
+FROM --platform=$BUILDPLATFORM golang:1.26.4@sha256:f96cc555eb8db430159a3aa6797cd5bae561945b7b0fe7d0e284c63a3b291609 AS builder
+
+ARG TARGETOS
+ARG TARGETARCH
 
 WORKDIR /workspace
 # Copy the Go Modules manifests
@@ -14,11 +17,11 @@ COPY cmd/ cmd/
 COPY internal/ internal/
 
 # Build
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a -o jira-bot ./cmd/...
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -a -o jira-bot ./cmd/...
 
 # Use distroless as minimal base image to package the manager binary
 # Refer to https://github.com/GoogleContainerTools/distroless for more details
-FROM gcr.io/distroless/static:latest
+FROM gcr.io/distroless/static:nonroot@sha256:c0f429e16b13e583da7e5a6ec20dd656d325d88e6819cafe0adb0828976529463
 WORKDIR /
 ENTRYPOINT ["/jira-bot"]
 

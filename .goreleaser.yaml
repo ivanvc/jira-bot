@@ -1,0 +1,47 @@
+version: 2
+
+builds:
+  - main: ./cmd/jb
+    binary: jira-bot
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+
+dockers:
+  - image_templates:
+      - "ivan/jira-bot:{{ .Tag }}-amd64"
+      - "ivan/jira-bot:latest-amd64"
+    use: buildx
+    dockerfile: Dockerfile.goreleaser
+    build_flag_templates:
+      - "--platform=linux/amd64"
+  - image_templates:
+      - "ivan/jira-bot:{{ .Tag }}-arm64"
+      - "ivan/jira-bot:latest-arm64"
+    use: buildx
+    dockerfile: Dockerfile.goreleaser
+    goarch: arm64
+    build_flag_templates:
+      - "--platform=linux/arm64"
+
+docker_manifests:
+  - name_template: "ivan/jira-bot:{{ .Tag }}"
+    image_templates:
+      - "ivan/jira-bot:{{ .Tag }}-amd64"
+      - "ivan/jira-bot:{{ .Tag }}-arm64"
+  - name_template: "ivan/jira-bot:latest"
+    image_templates:
+      - "ivan/jira-bot:latest-amd64"
+      - "ivan/jira-bot:latest-arm64"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^chore:"
+      - "^ci:"
