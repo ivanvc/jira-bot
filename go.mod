@@ -5,7 +5,7 @@ go 1.26.0
 toolchain go1.26.4
 
 require (
-	github.com/andygrunwald/go-jira v1.16.0
+	github.com/andygrunwald/go-jira v1.17.0
 	github.com/charmbracelet/log v0.3.1
 	github.com/golang-jwt/jwt/v4 v4.5.2
 	github.com/google/go-github/v58 v58.0.0
