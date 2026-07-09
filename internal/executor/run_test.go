@@ -1994,8 +1994,11 @@ func TestResolveJiraClient_EmptyHTMLURL_NoReturnToAppended(t *testing.T) {
 	require.NotEmpty(t, authBody, "Expected a PostComment call with auth link")
 	// Auth link should NOT contain return_to
 	assert.NotContains(t, authBody, "return_to")
-	// Auth link should contain comment_id and installation_id
-	assert.Contains(t, authBody, "comment_id=0")
+	// Auth link should NOT contain comment_id, owner, or repo query parameters
+	assert.NotContains(t, authBody, "comment_id")
+	assert.NotContains(t, authBody, "owner=")
+	assert.NotContains(t, authBody, "repo=")
+	// Auth link should contain installation_id
 	assert.Contains(t, authBody, "installation_id=42")
 }
 
@@ -2050,6 +2053,12 @@ func TestResolveJiraClient_ValidHTMLURL_ReturnToAppended(t *testing.T) {
 	require.NotEmpty(t, authBody, "Expected a PostComment call with auth link")
 	// Auth link should contain the return_to parameter with percent-encoded path
 	assert.Contains(t, authBody, "return_to=%2Forg%2Frepo%2Fissues%2F42")
+	// Auth link should NOT contain comment_id, owner, or repo query parameters
+	assert.NotContains(t, authBody, "comment_id")
+	assert.NotContains(t, authBody, "owner=")
+	assert.NotContains(t, authBody, "repo=")
+	// No fragment should be present since Comment.ID is zero
+	assert.NotContains(t, authBody, "issuecomment-")
 }
 
 func TestCreateJiraIssue_CRLFLineEndings_CommandParsedCorrectly(t *testing.T) {
@@ -2130,10 +2139,11 @@ func TestCreateJiraIssue_AssignNotSentAsJiraField(t *testing.T) {
 
 // --- 8.2 Auth link construction with comment context tests ---
 
-func TestResolveJiraClient_AuthLinkContainsCommentIDAndInstallationID(t *testing.T) {
-	// Validates: Requirements 1.1
-	// When resolveJiraClient posts an auth link, it should contain comment_id and
-	// installation_id query parameters matching the issueComment fields.
+func TestResolveJiraClient_AuthLinkContainsFragmentAndInstallationID(t *testing.T) {
+	// Validates: Requirements 1.1, 1.2, 1.3
+	// When resolveJiraClient posts an auth link and commentID > 0, the return_to
+	// should contain a #issuecomment-{id} fragment, and the URL should NOT contain
+	// comment_id, owner, or repo query parameters.
 	gh := &MockGitHubClient{}
 	resolver := &FlexibleMockResolver{
 		Result: common.JiraClientResolveResult{
@@ -2180,25 +2190,31 @@ func TestResolveJiraClient_AuthLinkContainsCommentIDAndInstallationID(t *testing
 		}
 	}
 	require.NotEmpty(t, authBody, "Expected a PostComment call with auth link")
-	// Auth link should contain comment_id matching Comment.ID
-	assert.Contains(t, authBody, "comment_id=98765")
+	// Auth link should NOT contain comment_id, owner, or repo query parameters
+	assert.NotContains(t, authBody, "comment_id")
+	assert.NotContains(t, authBody, "owner=")
+	assert.NotContains(t, authBody, "repo=")
 	// Auth link should contain installation_id matching Installation.ID
 	assert.Contains(t, authBody, "installation_id=555")
+	// Auth link return_to should contain the fragment with the comment ID
+	assert.Contains(t, authBody, "%23issuecomment-98765")
 }
 
-func TestResolveJiraClient_AuthLinkCommentContextValuesMatchIssueComment(t *testing.T) {
-	// Validates: Requirements 1.1
-	// Verify that different Comment.ID and Installation.ID values are correctly
-	// reflected in the auth link query parameters.
+func TestResolveJiraClient_AuthLinkFragmentBehaviorMatchesCommentID(t *testing.T) {
+	// Validates: Requirements 1.1, 1.2, 1.3
+	// Verify that when commentID > 0, the return_to includes a fragment, and when
+	// commentID == 0, there is no fragment. Also verifies comment_id, owner, and
+	// repo query parameters are never present.
 	tests := []struct {
 		name           string
 		commentID      uint64
 		installationID int64
+		expectFragment bool
 	}{
-		{"zero comment ID", 0, 100},
-		{"large comment ID", 1234567890, 99},
-		{"large installation ID", 42, 9876543210},
-		{"both large values", 18446744073709551615, 9223372036854775807},
+		{"zero comment ID - no fragment", 0, 100, false},
+		{"large comment ID - has fragment", 1234567890, 99, true},
+		{"large installation ID - has fragment", 42, 9876543210, true},
+		{"both large values - has fragment", 18446744073709551615, 9223372036854775807, true},
 	}
 
 	for _, tc := range tests {
@@ -2249,10 +2265,20 @@ func TestResolveJiraClient_AuthLinkCommentContextValuesMatchIssueComment(t *test
 				}
 			}
 			require.NotEmpty(t, authBody, "Expected a PostComment call with auth link")
-			expectedCommentID := fmt.Sprintf("comment_id=%d", tc.commentID)
+			// Auth link should NEVER contain comment_id, owner, or repo query parameters
+			assert.NotContains(t, authBody, "comment_id")
+			assert.NotContains(t, authBody, "owner=")
+			assert.NotContains(t, authBody, "repo=")
+			// Auth link should contain installation_id
 			expectedInstallationID := fmt.Sprintf("installation_id=%d", tc.installationID)
-			assert.Contains(t, authBody, expectedCommentID)
 			assert.Contains(t, authBody, expectedInstallationID)
+			// Verify fragment behavior based on commentID
+			if tc.expectFragment {
+				expectedFragment := fmt.Sprintf("issuecomment-%d", tc.commentID)
+				assert.Contains(t, authBody, expectedFragment)
+			} else {
+				assert.NotContains(t, authBody, "issuecomment-")
+			}
 		})
 	}
 }

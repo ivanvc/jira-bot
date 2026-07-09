@@ -176,26 +176,16 @@ func (h *userAuthHandler) handleAuthorize(w http.ResponseWriter, req *http.Reque
 	}
 	state := hex.EncodeToString(b)
 
-	// Read optional return_to query parameter
+	// Read optional return_to and installation_id query parameters.
 	returnTo := req.URL.Query().Get("return_to")
 
-	// Read optional comment_id (uint64) and installation_id (int64) query parameters.
-	// Invalid or missing values are treated as zero (omitted from cookie via omitempty).
-	var commentID uint64
-	if raw := req.URL.Query().Get("comment_id"); raw != "" {
-		commentID, _ = strconv.ParseUint(raw, 10, 64)
-	}
 	var installationID int64
 	if raw := req.URL.Query().Get("installation_id"); raw != "" {
 		installationID, _ = strconv.ParseInt(raw, 10, 64)
 	}
 
-	// Read optional owner and repo query parameters for FetchComment.
-	owner := req.URL.Query().Get("owner")
-	repo := req.URL.Query().Get("repo")
-
 	// Store state and return_to in a signed JSON cookie
-	payload := cookiePayload{State: state, ReturnTo: returnTo, CommentID: commentID, InstallationID: installationID, Owner: owner, Repo: repo}
+	payload := cookiePayload{State: state, ReturnTo: returnTo, InstallationID: installationID}
 	signed := signedCookiePayload(payload, h.cookieSecret, time.Now())
 	http.SetCookie(w, &http.Cookie{
 		Name:     userAuthSessionCookie,
@@ -267,15 +257,12 @@ func (h *userAuthHandler) handleGitHubCallback(w http.ResponseWriter, req *http.
 		return
 	}
 
-	// Store the login in a signed cookie, preserving ReturnTo, CommentID, InstallationID, Owner, and Repo from the original payload
+	// Store the login in a signed cookie, preserving ReturnTo and InstallationID from the original payload
 	updatedPayload := cookiePayload{
 		State:          stateParam,
 		Login:          login,
 		ReturnTo:       existingPayload.ReturnTo,
-		CommentID:      existingPayload.CommentID,
 		InstallationID: existingPayload.InstallationID,
-		Owner:          existingPayload.Owner,
-		Repo:           existingPayload.Repo,
 	}
 	signed := signedCookiePayload(updatedPayload, h.cookieSecret, time.Now())
 	http.SetCookie(w, &http.Cookie{
@@ -393,14 +380,26 @@ func (h *userAuthHandler) handleAtlassianCallback(w http.ResponseWriter, req *ht
 
 	log.Info("User authorization complete", "login", login, "cloud_id", cloudID)
 
-	// Auto-execution: if the cookie carried comment context, attempt to run
-	// the original /jira command now that we have a valid token.
-	commentID := payload.CommentID
+	// Auto-execution: derive owner, repo, commentID from ReturnTo path.
 	installationID := payload.InstallationID
-	owner := payload.Owner
-	repo := payload.Repo
 
-	if commentID == 0 || installationID == 0 || owner == "" || repo == "" {
+	if installationID == 0 {
+		renderUserAuthSuccess(w, login, returnTo, h.githubRedirectBaseURL, h.redirectDelaySec, nil)
+		return
+	}
+
+	rtInfo, err := parseReturnTo(payload.ReturnTo)
+	if err != nil {
+		log.Warn("Auto-execution skipped: cannot parse ReturnTo", "error", err, "login", login, "return_to", payload.ReturnTo)
+		renderUserAuthSuccess(w, login, returnTo, h.githubRedirectBaseURL, h.redirectDelaySec, nil)
+		return
+	}
+
+	owner := rtInfo.Owner
+	repo := rtInfo.Repo
+	commentID := rtInfo.CommentID
+
+	if commentID == 0 {
 		renderUserAuthSuccess(w, login, returnTo, h.githubRedirectBaseURL, h.redirectDelaySec, nil)
 		return
 	}
@@ -635,6 +634,71 @@ You can close this page and try the authorization flow again from your GitHub is
 </p>
 </body>
 </html>`, title, title, message)
+}
+
+// returnToInfo holds the parsed components of a ReturnTo path.
+type returnToInfo struct {
+	Owner     string
+	Repo      string
+	CommentID uint64
+}
+
+// parseReturnTo extracts owner, repo, and commentID from a ReturnTo path.
+// Expected formats:
+//
+//	/{owner}/{repo}/issues/{number}#issuecomment-{id}
+//	/{owner}/{repo}/pull/{number}#issuecomment-{id}
+//	/{owner}/{repo}/issues/{number}
+//	/{owner}/{repo}/pull/{number}
+//
+// Returns an error if the path has fewer than 2 non-empty segments or if
+// owner/repo segments are empty.
+func parseReturnTo(returnTo string) (returnToInfo, error) {
+	// Separate the fragment from the path
+	path := returnTo
+	fragment := ""
+	if idx := strings.IndexByte(returnTo, '#'); idx >= 0 {
+		path = returnTo[:idx]
+		fragment = returnTo[idx+1:]
+	}
+
+	// Split path on "/" and collect non-empty segments
+	parts := strings.Split(path, "/")
+	var segments []string
+	for _, p := range parts {
+		if p != "" {
+			segments = append(segments, p)
+		}
+	}
+
+	if len(segments) < 2 {
+		return returnToInfo{}, fmt.Errorf("returnTo path has fewer than 2 non-empty segments: %q", returnTo)
+	}
+
+	owner := segments[0]
+	repo := segments[1]
+
+	// owner and repo should already be non-empty given the segment collection above,
+	// but guard against the case of consecutive slashes producing empty strings
+	// (this can't happen with the filter above, but kept for explicitness per req 3.6).
+	if owner == "" || repo == "" {
+		return returnToInfo{}, fmt.Errorf("returnTo path has empty owner or repo: %q", returnTo)
+	}
+
+	// Parse the fragment for #issuecomment-{id}
+	var commentID uint64
+	const commentPrefix = "issuecomment-"
+	if strings.HasPrefix(fragment, commentPrefix) {
+		idStr := fragment[len(commentPrefix):]
+		// Only parse if idStr is all digits
+		if len(idStr) > 0 {
+			if id, err := strconv.ParseUint(idStr, 10, 64); err == nil {
+				commentID = id
+			}
+		}
+	}
+
+	return returnToInfo{Owner: owner, Repo: repo, CommentID: commentID}, nil
 }
 
 // parseIssueNumberFromCommentsURL extracts the issue number from a GitHub API

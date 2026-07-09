@@ -350,12 +350,13 @@ func resolveJiraClient(ctx context.Context, state *common.State, issueComment *g
 		if err == nil {
 			q := u.Query()
 			if path := extractPath(issueComment.Issue.HTMLURL); path != "" {
-				q.Set("return_to", path)
+				returnTo := path
+				if issueComment.Comment.ID > 0 {
+					returnTo += fmt.Sprintf("#issuecomment-%d", issueComment.Comment.ID)
+				}
+				q.Set("return_to", returnTo)
 			}
-			q.Set("comment_id", fmt.Sprintf("%d", issueComment.Comment.ID))
 			q.Set("installation_id", fmt.Sprintf("%d", issueComment.Installation.ID))
-			q.Set("owner", issueComment.Repository.Owner.Login)
-			q.Set("repo", issueComment.Repository.Name)
 			u.RawQuery = q.Encode()
 			authLink = u.String()
 		}

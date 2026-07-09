@@ -16,11 +16,8 @@ import (
 type cookiePayload struct {
 	State          string `json:"s"`           // CSRF state token
 	Login          string `json:"l,omitempty"` // GitHub login (set after GitHub callback)
-	ReturnTo       string `json:"r,omitempty"` // return path (e.g., "/org/repo/issues/42")
-	CommentID      uint64 `json:"c,omitempty"` // originating comment ID
+	ReturnTo       string `json:"r,omitempty"` // return path with fragment
 	InstallationID int64  `json:"i,omitempty"` // GitHub App installation ID
-	Owner          string `json:"o,omitempty"` // repository owner (for FetchComment)
-	Repo           string `json:"n,omitempty"` // repository name (for FetchComment)
 }
 
 // signedCookiePayload marshals a cookiePayload to JSON, then signs it using

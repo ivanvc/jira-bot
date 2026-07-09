@@ -162,14 +162,118 @@ func TestHandleAuthorize_WithReturnTo(t *testing.T) {
 	assert.Equal(t, "/org/repo/issues/42", payload.ReturnTo)
 }
 
-// TestHandleAuthorize_WithCommentContext verifies that when comment_id and
-// installation_id query parameters are provided, they are stored in the cookie payload.
-// Validates: Requirements 1.1, 1.4, 1.5
+// TestHandleAuthorize_CookieContainsOnlyExpectedFields verifies that the signed
+// cookie produced by handleAuthorize contains only State, ReturnTo, and
+// InstallationID by decoding the raw JSON and asserting on the key set.
+// Validates: Requirement 2.3
+func TestHandleAuthorize_CookieContainsOnlyExpectedFields(t *testing.T) {
+	store := newMockUserTokenStore()
+	handler := newTestAuthHandler(store)
+
+	req := httptest.NewRequest(http.MethodGet, "/oauth/authorize?return_to=%2Forg%2Frepo%2Fissues%2F42%23issuecomment-999&installation_id=555", nil)
+	rec := httptest.NewRecorder()
+
+	handler.handleAuthorize(rec, req)
+
+	result := rec.Result()
+	defer result.Body.Close()
+
+	assert.Equal(t, http.StatusFound, result.StatusCode)
+
+	var sessionCookie *http.Cookie
+	for _, c := range result.Cookies() {
+		if c.Name == userAuthSessionCookie {
+			sessionCookie = c
+			break
+		}
+	}
+	require.NotNil(t, sessionCookie)
+
+	// Decode the raw JSON from the signed cookie
+	raw, err := verifySignedCookie(sessionCookie.Value, "test-cookie-secret", authSessionTTL)
+	require.NoError(t, err)
+
+	// Unmarshal into a generic map to inspect exact keys
+	var m map[string]interface{}
+	err = json.Unmarshal([]byte(raw), &m)
+	require.NoError(t, err)
+
+	// Only "s" (State), "r" (ReturnTo), "i" (InstallationID) should be present
+	allowedKeys := map[string]bool{"s": true, "r": true, "i": true}
+	for key := range m {
+		assert.True(t, allowedKeys[key], "unexpected key %q in cookie JSON payload", key)
+	}
+	assert.Contains(t, m, "s", "cookie should contain State (s)")
+	assert.Contains(t, m, "r", "cookie should contain ReturnTo (r)")
+	assert.Contains(t, m, "i", "cookie should contain InstallationID (i)")
+
+	// Verify values
+	payload, err := verifySignedCookiePayload(sessionCookie.Value, "test-cookie-secret", authSessionTTL)
+	require.NoError(t, err)
+	assert.Equal(t, "/org/repo/issues/42#issuecomment-999", payload.ReturnTo)
+	assert.Equal(t, int64(555), payload.InstallationID)
+	assert.Len(t, payload.State, 64)
+}
+
+// TestHandleAuthorize_LegacyParamsIgnored verifies that even if comment_id, owner,
+// and repo query params are present in the request, they are completely ignored
+// and do not appear in the cookie payload.
+// Validates: Requirement 2.3
+func TestHandleAuthorize_LegacyParamsIgnored(t *testing.T) {
+	store := newMockUserTokenStore()
+	handler := newTestAuthHandler(store)
+
+	// Request with all legacy params present
+	req := httptest.NewRequest(http.MethodGet, "/oauth/authorize?return_to=%2Forg%2Frepo%2Fissues%2F42&comment_id=999888777&owner=someowner&repo=somerepo&installation_id=111", nil)
+	rec := httptest.NewRecorder()
+
+	handler.handleAuthorize(rec, req)
+
+	result := rec.Result()
+	defer result.Body.Close()
+
+	assert.Equal(t, http.StatusFound, result.StatusCode)
+
+	var sessionCookie *http.Cookie
+	for _, c := range result.Cookies() {
+		if c.Name == userAuthSessionCookie {
+			sessionCookie = c
+			break
+		}
+	}
+	require.NotNil(t, sessionCookie)
+
+	// Decode raw JSON and verify no legacy fields
+	raw, err := verifySignedCookie(sessionCookie.Value, "test-cookie-secret", authSessionTTL)
+	require.NoError(t, err)
+
+	// Must NOT contain legacy JSON keys
+	assert.NotContains(t, raw, `"c":`, "cookie should not contain CommentID (c)")
+	assert.NotContains(t, raw, `"o":`, "cookie should not contain Owner (o)")
+	assert.NotContains(t, raw, `"n":`, "cookie should not contain Repo (n)")
+
+	// Must NOT contain the values from the ignored params
+	assert.NotContains(t, raw, "999888777")
+	assert.NotContains(t, raw, "someowner")
+	assert.NotContains(t, raw, "somerepo")
+
+	// Should only contain the expected values
+	payload, err := verifySignedCookiePayload(sessionCookie.Value, "test-cookie-secret", authSessionTTL)
+	require.NoError(t, err)
+	assert.Equal(t, "/org/repo/issues/42", payload.ReturnTo)
+	assert.Equal(t, int64(111), payload.InstallationID)
+	assert.Len(t, payload.State, 64)
+}
+
+// TestHandleAuthorize_WithCommentContext verifies that when comment_id, owner,
+// repo, and installation_id query parameters are provided, only installation_id
+// and return_to are stored in the cookie payload. Legacy params are ignored.
+// Validates: Requirement 2.3
 func TestHandleAuthorize_WithCommentContext(t *testing.T) {
 	store := newMockUserTokenStore()
 	handler := newTestAuthHandler(store)
 
-	req := httptest.NewRequest(http.MethodGet, "/oauth/authorize?return_to=%2Forg%2Frepo%2Fissues%2F42&comment_id=123456789&installation_id=987654", nil)
+	req := httptest.NewRequest(http.MethodGet, "/oauth/authorize?return_to=%2Forg%2Frepo%2Fissues%2F42&comment_id=123456789&installation_id=987654&owner=org&repo=repo", nil)
 	rec := httptest.NewRecorder()
 
 	handler.handleAuthorize(rec, req)
@@ -191,18 +295,24 @@ func TestHandleAuthorize_WithCommentContext(t *testing.T) {
 	payload, err := verifySignedCookiePayload(sessionCookie.Value, "test-cookie-secret", authSessionTTL)
 	require.NoError(t, err)
 	assert.Equal(t, "/org/repo/issues/42", payload.ReturnTo)
-	assert.Equal(t, uint64(123456789), payload.CommentID)
 	assert.Equal(t, int64(987654), payload.InstallationID)
+
+	// Verify the raw JSON cookie does NOT contain legacy fields (comment_id, owner, repo)
+	raw, err := verifySignedCookie(sessionCookie.Value, "test-cookie-secret", authSessionTTL)
+	require.NoError(t, err)
+	assert.NotContains(t, raw, `"c":`)
+	assert.NotContains(t, raw, `"o":`)
+	assert.NotContains(t, raw, `"n":`)
 }
 
-// TestHandleAuthorize_InvalidCommentContext verifies that invalid comment_id and
-// installation_id values are treated as zero (absent).
-// Validates: Requirements 1.4, 1.5
-func TestHandleAuthorize_InvalidCommentContext(t *testing.T) {
+// TestHandleAuthorize_InvalidInstallationID verifies that an invalid
+// installation_id value is treated as zero. Legacy params (comment_id, owner, repo) are ignored.
+// Validates: Requirement 2.3
+func TestHandleAuthorize_InvalidInstallationID(t *testing.T) {
 	store := newMockUserTokenStore()
 	handler := newTestAuthHandler(store)
 
-	req := httptest.NewRequest(http.MethodGet, "/oauth/authorize?comment_id=not-a-number&installation_id=also-bad", nil)
+	req := httptest.NewRequest(http.MethodGet, "/oauth/authorize?comment_id=not-a-number&installation_id=also-bad&owner=org&repo=repo", nil)
 	rec := httptest.NewRecorder()
 
 	handler.handleAuthorize(rec, req)
@@ -223,14 +333,20 @@ func TestHandleAuthorize_InvalidCommentContext(t *testing.T) {
 
 	payload, err := verifySignedCookiePayload(sessionCookie.Value, "test-cookie-secret", authSessionTTL)
 	require.NoError(t, err)
-	assert.Equal(t, uint64(0), payload.CommentID, "invalid comment_id should be treated as zero")
 	assert.Equal(t, int64(0), payload.InstallationID, "invalid installation_id should be treated as zero")
+
+	// Verify no legacy fields exist in the raw cookie JSON
+	raw, err := verifySignedCookie(sessionCookie.Value, "test-cookie-secret", authSessionTTL)
+	require.NoError(t, err)
+	assert.NotContains(t, raw, `"c":`)
+	assert.NotContains(t, raw, `"o":`)
+	assert.NotContains(t, raw, `"n":`)
 }
 
-// TestHandleAuthorize_MissingCommentContext verifies that missing comment_id and
-// installation_id query parameters result in zero values in the cookie payload.
-// Validates: Requirements 1.4
-func TestHandleAuthorize_MissingCommentContext(t *testing.T) {
+// TestHandleAuthorize_MissingInstallationID verifies that missing installation_id
+// query parameter results in zero value in the cookie payload.
+// Validates: Requirement 2.3
+func TestHandleAuthorize_MissingInstallationID(t *testing.T) {
 	store := newMockUserTokenStore()
 	handler := newTestAuthHandler(store)
 
@@ -253,8 +369,8 @@ func TestHandleAuthorize_MissingCommentContext(t *testing.T) {
 
 	payload, err := verifySignedCookiePayload(sessionCookie.Value, "test-cookie-secret", authSessionTTL)
 	require.NoError(t, err)
-	assert.Equal(t, uint64(0), payload.CommentID)
 	assert.Equal(t, int64(0), payload.InstallationID)
+	assert.Equal(t, "/issues/1", payload.ReturnTo)
 }
 
 // TestHandleGitHubCallback_ExchangesCodeAndRedirectsToAtlassian tests the full
@@ -348,11 +464,12 @@ func TestHandleGitHubCallback_ExchangesCodeAndRedirectsToAtlassian(t *testing.T)
 	assert.Equal(t, "/org/repo/issues/7", updatedPayload.ReturnTo, "ReturnTo should be preserved across cookie rewrite")
 }
 
-// TestHandleGitHubCallback_PreservesCommentContext verifies that when the signed
-// cookie contains CommentID and InstallationID, they are preserved in the
-// rewritten cookie after the GitHub callback adds the login.
-// Validates: Requirement 1.2
-func TestHandleGitHubCallback_PreservesCommentContext(t *testing.T) {
+// TestHandleGitHubCallback_PreservesContext verifies that when the signed
+// cookie contains ReturnTo and InstallationID, they are preserved in the
+// rewritten cookie after the GitHub callback adds the login. Also verifies
+// the re-signed cookie does not contain legacy fields (CommentID, Owner, Repo).
+// Validates: Requirements 2.1, 2.2
+func TestHandleGitHubCallback_PreservesContext(t *testing.T) {
 	// Mock GitHub token endpoint
 	ghTokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -377,12 +494,11 @@ func TestHandleGitHubCallback_PreservesCommentContext(t *testing.T) {
 	handler.githubTokenURL = ghTokenServer.URL
 	handler.githubUserAPIURL = ghUserServer.URL
 
-	// Create a signed cookie with CommentID and InstallationID set
+	// Create a signed cookie with ReturnTo and InstallationID set (no legacy fields)
 	stateValue := "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
 	initialPayload := cookiePayload{
 		State:          stateValue,
-		ReturnTo:       "/org/repo/issues/7",
-		CommentID:      12345678,
+		ReturnTo:       "/org/repo/issues/7#issuecomment-12345678",
 		InstallationID: 9876543,
 	}
 	signedState := signedCookiePayload(initialPayload, "test-cookie-secret", time.Now())
@@ -413,13 +529,19 @@ func TestHandleGitHubCallback_PreservesCommentContext(t *testing.T) {
 	}
 	require.NotNil(t, loginCookie, "session cookie should be set with login")
 
-	// Verify the updated payload preserves CommentID and InstallationID
+	// Verify the updated payload preserves ReturnTo and InstallationID
 	updatedPayload, err := verifySignedCookiePayload(loginCookie.Value, "test-cookie-secret", authSessionTTL)
 	require.NoError(t, err)
 	assert.Equal(t, "octocat", updatedPayload.Login)
-	assert.Equal(t, "/org/repo/issues/7", updatedPayload.ReturnTo)
-	assert.Equal(t, uint64(12345678), updatedPayload.CommentID, "CommentID should be preserved across cookie rewrite")
+	assert.Equal(t, "/org/repo/issues/7#issuecomment-12345678", updatedPayload.ReturnTo)
 	assert.Equal(t, int64(9876543), updatedPayload.InstallationID, "InstallationID should be preserved across cookie rewrite")
+
+	// Verify the re-signed cookie JSON does not contain legacy fields (CommentID, Owner, Repo)
+	rawPayload, err := verifySignedCookie(loginCookie.Value, "test-cookie-secret", authSessionTTL)
+	require.NoError(t, err)
+	assert.NotContains(t, rawPayload, `"c"`, "re-signed cookie should not contain CommentID (legacy 'c' key)")
+	assert.NotContains(t, rawPayload, `"o"`, "re-signed cookie should not contain Owner (legacy 'o' key)")
+	assert.NotContains(t, rawPayload, `"n"`, "re-signed cookie should not contain Repo (legacy 'n' key)")
 }
 
 // TestHandleAtlassianCallback_ExchangesCodeAndStoresToken tests the Atlassian
@@ -975,6 +1097,12 @@ type mockGitHubClientForHandler struct {
 	fetchCommentErr    error
 	calls              []string
 
+	// FetchComment argument capture for verifying parsed values from ReturnTo
+	FetchCommentInstallationID int64
+	FetchCommentOwner          string
+	FetchCommentRepo           string
+	FetchCommentID             uint64
+
 	// ListIssueComments configurable return values
 	ListCommentsResult []*gogithub.IssueComment
 	ListCommentsErr    error
@@ -1006,8 +1134,12 @@ func (m *mockGitHubClientForHandler) UpdateIssueDescription(_ context.Context, _
 	return nil
 }
 
-func (m *mockGitHubClientForHandler) FetchComment(_ context.Context, _ int64, _, _ string, _ uint64) (*github.IssueComment, error) {
+func (m *mockGitHubClientForHandler) FetchComment(_ context.Context, installationID int64, owner, repo string, commentID uint64) (*github.IssueComment, error) {
 	m.calls = append(m.calls, "FetchComment")
+	m.FetchCommentInstallationID = installationID
+	m.FetchCommentOwner = owner
+	m.FetchCommentRepo = repo
+	m.FetchCommentID = commentID
 	return m.fetchCommentResult, m.fetchCommentErr
 }
 
@@ -1111,14 +1243,12 @@ func TestHandleAtlassianCallback_AutoExec_HappyPath(t *testing.T) {
 	handler.atlassianTokenURL = atlTokenServer.URL
 	handler.state = handlerState
 
-	// Create a signed cookie with login, CommentID, and InstallationID
+	// Create a signed cookie with login, ReturnTo (with fragment), and InstallationID
 	loginPayload := cookiePayload{
 		State:          "somestate",
 		Login:          "octocat",
-		CommentID:      12345,
+		ReturnTo:       "/org/repo/issues/42#issuecomment-12345",
 		InstallationID: 99,
-		Owner:          "org",
-		Repo:           "repo",
 	}
 	signedLogin := signedCookiePayload(loginPayload, "test-cookie-secret", time.Now())
 
@@ -1141,8 +1271,8 @@ func TestHandleAtlassianCallback_AutoExec_HappyPath(t *testing.T) {
 }
 
 // TestHandleAtlassianCallback_AutoExec_MissingCommentContext tests that when
-// CommentID and InstallationID are absent from the cookie, auto-execution is
-// skipped and the standard success page is rendered.
+// ReturnTo has no comment fragment and InstallationID is absent from the cookie,
+// auto-execution is skipped and the standard success page is rendered.
 // Validates: Requirements 1.4, 1.6
 func TestHandleAtlassianCallback_AutoExec_MissingCommentContext(t *testing.T) {
 	atlTokenServer := atlTokenServerForAutoExec(t)
@@ -1222,10 +1352,8 @@ func TestHandleAtlassianCallback_AutoExec_DuplicateMarkerPresent(t *testing.T) {
 	loginPayload := cookiePayload{
 		State:          "somestate",
 		Login:          "octocat",
-		CommentID:      12345,
+		ReturnTo:       "/org/repo/issues/1#issuecomment-12345",
 		InstallationID: 99,
-		Owner:          "org",
-		Repo:           "repo",
 	}
 	signedLogin := signedCookiePayload(loginPayload, "test-cookie-secret", time.Now())
 
@@ -1277,10 +1405,8 @@ func TestHandleAtlassianCallback_AutoExec_NonJiraComment(t *testing.T) {
 	loginPayload := cookiePayload{
 		State:          "somestate",
 		Login:          "octocat",
-		CommentID:      12345,
+		ReturnTo:       "/org/repo/issues/1#issuecomment-12345",
 		InstallationID: 99,
-		Owner:          "org",
-		Repo:           "repo",
 	}
 	signedLogin := signedCookiePayload(loginPayload, "test-cookie-secret", time.Now())
 
@@ -1332,10 +1458,8 @@ func TestHandleAtlassianCallback_AutoExec_GitHubAPIFailure(t *testing.T) {
 	loginPayload := cookiePayload{
 		State:          "somestate",
 		Login:          "octocat",
-		CommentID:      12345,
+		ReturnTo:       "/org/repo/issues/1#issuecomment-12345",
 		InstallationID: 99,
-		Owner:          "org",
-		Repo:           "repo",
 	}
 	signedLogin := signedCookiePayload(loginPayload, "test-cookie-secret", time.Now())
 
@@ -1382,10 +1506,8 @@ func TestHandleAtlassianCallback_AutoExec_NilGitHubClient(t *testing.T) {
 	loginPayload := cookiePayload{
 		State:          "somestate",
 		Login:          "octocat",
-		CommentID:      12345,
+		ReturnTo:       "/org/repo/issues/1#issuecomment-12345",
 		InstallationID: 99,
-		Owner:          "org",
-		Repo:           "repo",
 	}
 	signedLogin := signedCookiePayload(loginPayload, "test-cookie-secret", time.Now())
 
@@ -1438,10 +1560,8 @@ func TestHandleAtlassianCallback_AutoExec_ExecutorError(t *testing.T) {
 	loginPayload := cookiePayload{
 		State:          "somestate",
 		Login:          "octocat",
-		CommentID:      12345,
+		ReturnTo:       "/org/repo/issues/1#issuecomment-12345",
 		InstallationID: 99,
-		Owner:          "org",
-		Repo:           "repo",
 	}
 	signedLogin := signedCookiePayload(loginPayload, "test-cookie-secret", time.Now())
 
@@ -1591,10 +1711,8 @@ func TestHandleAtlassianCallback_MarkerSearch_Found(t *testing.T) {
 	loginPayload := cookiePayload{
 		State:          "somestate",
 		Login:          "octocat",
-		CommentID:      12345,
+		ReturnTo:       "/org/repo/issues/1#issuecomment-12345",
 		InstallationID: 99,
-		Owner:          "org",
-		Repo:           "repo",
 	}
 	signedLogin := signedCookiePayload(loginPayload, "test-cookie-secret", time.Now())
 
@@ -1659,10 +1777,8 @@ func TestHandleAtlassianCallback_MarkerSearch_NotFound(t *testing.T) {
 	loginPayload := cookiePayload{
 		State:          "somestate",
 		Login:          "octocat",
-		CommentID:      12345,
+		ReturnTo:       "/org/repo/issues/1#issuecomment-12345",
 		InstallationID: 99,
-		Owner:          "org",
-		Repo:           "repo",
 	}
 	signedLogin := signedCookiePayload(loginPayload, "test-cookie-secret", time.Now())
 
@@ -1723,10 +1839,8 @@ func TestHandleAtlassianCallback_MarkerSearch_ListCommentsError(t *testing.T) {
 	loginPayload := cookiePayload{
 		State:          "somestate",
 		Login:          "octocat",
-		CommentID:      12345,
+		ReturnTo:       "/org/repo/issues/1#issuecomment-12345",
 		InstallationID: 99,
-		Owner:          "org",
-		Repo:           "repo",
 	}
 	signedLogin := signedCookiePayload(loginPayload, "test-cookie-secret", time.Now())
 
@@ -1790,10 +1904,8 @@ func TestHandleAtlassianCallback_MarkerSearch_ParseCommentsURLFails(t *testing.T
 	loginPayload := cookiePayload{
 		State:          "somestate",
 		Login:          "octocat",
-		CommentID:      12345,
+		ReturnTo:       "/org/repo/issues/1#issuecomment-12345",
 		InstallationID: 99,
-		Owner:          "org",
-		Repo:           "repo",
 	}
 	signedLogin := signedCookiePayload(loginPayload, "test-cookie-secret", time.Now())
 
@@ -1820,4 +1932,397 @@ func TestHandleAtlassianCallback_MarkerSearch_ParseCommentsURLFails(t *testing.T
 	for _, call := range ghClient.calls {
 		assert.NotEqual(t, "ListIssueComments", call, "ListIssueComments should not be called when CommentsURL parse fails")
 	}
+}
+
+// TestParseReturnTo_ValidPaths verifies correct extraction of owner, repo, and
+// commentID from various valid ReturnTo path formats (issues and pull requests
+// with fragments).
+// Validates: Requirements 3.1, 3.2, 3.3
+func TestParseReturnTo_ValidPaths(t *testing.T) {
+	tests := []struct {
+		name          string
+		input         string
+		wantOwner     string
+		wantRepo      string
+		wantCommentID uint64
+	}{
+		{
+			name:          "issue with comment fragment",
+			input:         "/owner/repo/issues/42#issuecomment-12345",
+			wantOwner:     "owner",
+			wantRepo:      "repo",
+			wantCommentID: 12345,
+		},
+		{
+			name:          "pull request with comment fragment",
+			input:         "/owner/repo/pull/7#issuecomment-99",
+			wantOwner:     "owner",
+			wantRepo:      "repo",
+			wantCommentID: 99,
+		},
+		{
+			name:          "org with hyphenated names",
+			input:         "/my-org/my-repo/issues/100#issuecomment-999999",
+			wantOwner:     "my-org",
+			wantRepo:      "my-repo",
+			wantCommentID: 999999,
+		},
+		{
+			name:          "large comment ID",
+			input:         "/org/project/issues/1#issuecomment-1234567890",
+			wantOwner:     "org",
+			wantRepo:      "project",
+			wantCommentID: 1234567890,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			info, err := parseReturnTo(tt.input)
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantOwner, info.Owner)
+			assert.Equal(t, tt.wantRepo, info.Repo)
+			assert.Equal(t, tt.wantCommentID, info.CommentID)
+		})
+	}
+}
+
+// TestParseReturnTo_NoFragment verifies that parseReturnTo returns commentID=0
+// when the fragment is absent or does not match the issuecomment-{id} pattern.
+// Validates: Requirements 3.4
+func TestParseReturnTo_NoFragment(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		wantOwner string
+		wantRepo  string
+	}{
+		{
+			name:      "issue path without fragment",
+			input:     "/owner/repo/issues/42",
+			wantOwner: "owner",
+			wantRepo:  "repo",
+		},
+		{
+			name:      "pull request path without fragment",
+			input:     "/owner/repo/pull/7",
+			wantOwner: "owner",
+			wantRepo:  "repo",
+		},
+		{
+			name:      "fragment with non-matching prefix",
+			input:     "/owner/repo/issues/42#some-other-anchor",
+			wantOwner: "owner",
+			wantRepo:  "repo",
+		},
+		{
+			name:      "fragment with only issuecomment prefix, no digits",
+			input:     "/owner/repo/issues/42#issuecomment-",
+			wantOwner: "owner",
+			wantRepo:  "repo",
+		},
+		{
+			name:      "empty fragment",
+			input:     "/owner/repo/issues/42#",
+			wantOwner: "owner",
+			wantRepo:  "repo",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			info, err := parseReturnTo(tt.input)
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantOwner, info.Owner)
+			assert.Equal(t, tt.wantRepo, info.Repo)
+			assert.Equal(t, uint64(0), info.CommentID, "commentID should be 0 when fragment is absent or non-matching")
+		})
+	}
+}
+
+// TestParseReturnTo_ErrorCases verifies that parseReturnTo returns an error for
+// malformed paths: empty string, single segment, and consecutive slashes that
+// result in fewer than 2 non-empty segments.
+// Validates: Requirements 3.5, 3.6
+func TestParseReturnTo_ErrorCases(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{
+			name:  "empty string",
+			input: "",
+		},
+		{
+			name:  "single segment",
+			input: "/owner",
+		},
+		{
+			name:  "only slashes",
+			input: "///",
+		},
+		{
+			name:  "single segment without leading slash",
+			input: "owner",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := parseReturnTo(tt.input)
+			assert.Error(t, err, "parseReturnTo should return an error for input %q", tt.input)
+		})
+	}
+}
+
+// TestHandleAtlassianCallback_AutoExec_FetchCommentUseParsedValues verifies that
+// FetchComment is called with owner, repo, and commentID parsed from the ReturnTo
+// path fragment, not from separate cookie fields.
+// Validates: Requirements 4.1, 4.2, 4.3
+func TestHandleAtlassianCallback_AutoExec_FetchCommentUseParsedValues(t *testing.T) {
+	atlTokenServer := atlTokenServerForAutoExec(t)
+	defer atlTokenServer.Close()
+
+	store := newMockUserTokenStore()
+
+	ghClient := &mockGitHubClientForHandler{
+		fetchCommentResult: newTestIssueComment("/jira create", "Clean issue body"),
+	}
+	jiraClient := &mockJiraClientForHandler{returnKey: "PROJ-55"}
+
+	handlerState := &common.State{
+		Config: common.Config{
+			JiraDefaultProject:   "DEFAULT",
+			JiraDefaultIssueType: "Task",
+		},
+		GitHubClient:       ghClient,
+		JiraClientResolver: &mockJiraClientResolverForHandler{client: jiraClient},
+	}
+
+	handler := newTestAuthHandler(store)
+	handler.atlassianTokenURL = atlTokenServer.URL
+	handler.state = handlerState
+
+	// ReturnTo contains owner=myorg, repo=myrepo, commentID=12345
+	loginPayload := cookiePayload{
+		State:          "somestate",
+		Login:          "octocat",
+		ReturnTo:       "/myorg/myrepo/issues/42#issuecomment-12345",
+		InstallationID: 777,
+	}
+	signedLogin := signedCookiePayload(loginPayload, "test-cookie-secret", time.Now())
+
+	req := httptest.NewRequest(http.MethodGet, "/oauth/atlassian/callback?code=test-auth-code", nil)
+	req.AddCookie(&http.Cookie{
+		Name:  userAuthSessionCookie,
+		Value: signedLogin,
+	})
+	rec := httptest.NewRecorder()
+
+	handler.handleAtlassianCallback(rec, req)
+
+	result := rec.Result()
+	defer result.Body.Close()
+
+	assert.Equal(t, http.StatusOK, result.StatusCode)
+	body := rec.Body.String()
+	assert.Contains(t, body, "Authorization Complete")
+	assert.Contains(t, body, "Jira issue created successfully")
+
+	// Verify FetchComment was called with values parsed from ReturnTo
+	assert.Contains(t, ghClient.calls, "FetchComment", "FetchComment should be called")
+	assert.Equal(t, int64(777), ghClient.FetchCommentInstallationID, "FetchComment should receive InstallationID from cookie")
+	assert.Equal(t, "myorg", ghClient.FetchCommentOwner, "FetchComment should receive owner parsed from ReturnTo")
+	assert.Equal(t, "myrepo", ghClient.FetchCommentRepo, "FetchComment should receive repo parsed from ReturnTo")
+	assert.Equal(t, uint64(12345), ghClient.FetchCommentID, "FetchComment should receive commentID parsed from ReturnTo fragment")
+}
+
+// TestHandleAtlassianCallback_SkipsAutoExec_WhenCommentIDIsZero verifies that
+// when ReturnTo has no fragment (commentID=0), auto-execution is skipped and
+// FetchComment is never called. The success page renders with a redirect.
+// Validates: Requirements 4.2, 5.2
+func TestHandleAtlassianCallback_SkipsAutoExec_WhenCommentIDIsZero(t *testing.T) {
+	atlTokenServer := atlTokenServerForAutoExec(t)
+	defer atlTokenServer.Close()
+
+	store := newMockUserTokenStore()
+
+	ghClient := &mockGitHubClientForHandler{
+		fetchCommentResult: newTestIssueComment("/jira create", "body"),
+	}
+
+	handlerState := &common.State{
+		Config: common.Config{
+			JiraDefaultProject:   "DEFAULT",
+			JiraDefaultIssueType: "Task",
+		},
+		GitHubClient: ghClient,
+	}
+
+	handler := newTestAuthHandler(store)
+	handler.atlassianTokenURL = atlTokenServer.URL
+	handler.state = handlerState
+
+	// ReturnTo with NO fragment → commentID will be 0 after parsing
+	loginPayload := cookiePayload{
+		State:          "somestate",
+		Login:          "octocat",
+		ReturnTo:       "/org/repo/issues/42",
+		InstallationID: 99,
+	}
+	signedLogin := signedCookiePayload(loginPayload, "test-cookie-secret", time.Now())
+
+	req := httptest.NewRequest(http.MethodGet, "/oauth/atlassian/callback?code=test-auth-code", nil)
+	req.AddCookie(&http.Cookie{
+		Name:  userAuthSessionCookie,
+		Value: signedLogin,
+	})
+	rec := httptest.NewRecorder()
+
+	handler.handleAtlassianCallback(rec, req)
+
+	result := rec.Result()
+	defer result.Body.Close()
+
+	assert.Equal(t, http.StatusOK, result.StatusCode)
+	body := rec.Body.String()
+	assert.Contains(t, body, "Authorization Complete")
+	// Auto-execution should be skipped
+	assert.NotContains(t, body, "Jira issue created")
+	assert.NotContains(t, body, "Could not auto-create")
+	// FetchComment should NOT have been called
+	for _, call := range ghClient.calls {
+		assert.NotEqual(t, "FetchComment", call, "FetchComment should not be called when commentID is 0")
+	}
+	// Success page should still contain a redirect back to the ReturnTo path
+	assert.Contains(t, body, "/org/repo/issues/42", "success page should contain ReturnTo redirect")
+}
+
+// TestHandleAtlassianCallback_SkipsAutoExec_WhenParseReturnToFails verifies
+// that when ReturnTo is malformed (parseReturnTo returns error), auto-execution
+// is skipped and FetchComment is never called. The success page renders gracefully.
+// Validates: Requirements 4.3, 5.3
+func TestHandleAtlassianCallback_SkipsAutoExec_WhenParseReturnToFails(t *testing.T) {
+	atlTokenServer := atlTokenServerForAutoExec(t)
+	defer atlTokenServer.Close()
+
+	store := newMockUserTokenStore()
+
+	ghClient := &mockGitHubClientForHandler{
+		fetchCommentResult: newTestIssueComment("/jira create", "body"),
+	}
+
+	handlerState := &common.State{
+		Config: common.Config{
+			JiraDefaultProject:   "DEFAULT",
+			JiraDefaultIssueType: "Task",
+		},
+		GitHubClient: ghClient,
+	}
+
+	handler := newTestAuthHandler(store)
+	handler.atlassianTokenURL = atlTokenServer.URL
+	handler.state = handlerState
+
+	// ReturnTo with only a single path segment — parseReturnTo will return error
+	loginPayload := cookiePayload{
+		State:          "somestate",
+		Login:          "octocat",
+		ReturnTo:       "/owner",
+		InstallationID: 99,
+	}
+	signedLogin := signedCookiePayload(loginPayload, "test-cookie-secret", time.Now())
+
+	req := httptest.NewRequest(http.MethodGet, "/oauth/atlassian/callback?code=test-auth-code", nil)
+	req.AddCookie(&http.Cookie{
+		Name:  userAuthSessionCookie,
+		Value: signedLogin,
+	})
+	rec := httptest.NewRecorder()
+
+	handler.handleAtlassianCallback(rec, req)
+
+	result := rec.Result()
+	defer result.Body.Close()
+
+	assert.Equal(t, http.StatusOK, result.StatusCode)
+	body := rec.Body.String()
+	assert.Contains(t, body, "Authorization Complete")
+	// Auto-execution should be skipped
+	assert.NotContains(t, body, "Jira issue created")
+	assert.NotContains(t, body, "Could not auto-create")
+	// FetchComment should NOT have been called
+	for _, call := range ghClient.calls {
+		assert.NotEqual(t, "FetchComment", call, "FetchComment should not be called when parseReturnTo fails")
+	}
+}
+
+// TestHandleAtlassianCallback_LegacyCookie_EmptyReturnTo_SkipsAutoExec verifies
+// backward compatibility: when the cookie has an empty ReturnTo (simulating a
+// legacy cookie that lost its fields after the struct change), auto-execution is
+// skipped gracefully without error.
+// Validates: Requirements 5.1, 5.2, 5.3
+func TestHandleAtlassianCallback_LegacyCookie_EmptyReturnTo_SkipsAutoExec(t *testing.T) {
+	atlTokenServer := atlTokenServerForAutoExec(t)
+	defer atlTokenServer.Close()
+
+	store := newMockUserTokenStore()
+
+	ghClient := &mockGitHubClientForHandler{
+		fetchCommentResult: newTestIssueComment("/jira create", "body"),
+	}
+
+	handlerState := &common.State{
+		Config: common.Config{
+			JiraDefaultProject:   "DEFAULT",
+			JiraDefaultIssueType: "Task",
+		},
+		GitHubClient: ghClient,
+	}
+
+	handler := newTestAuthHandler(store)
+	handler.atlassianTokenURL = atlTokenServer.URL
+	handler.state = handlerState
+
+	// Simulate a legacy cookie: ReturnTo is empty (the old cookie had separate
+	// CommentID/Owner/Repo fields which no longer exist in the struct, so they
+	// are silently discarded during deserialization). InstallationID is set to
+	// simulate an in-flight auth flow that started before deployment.
+	loginPayload := cookiePayload{
+		State:          "somestate",
+		Login:          "octocat",
+		ReturnTo:       "", // empty — simulates legacy cookie
+		InstallationID: 123,
+	}
+	signedLogin := signedCookiePayload(loginPayload, "test-cookie-secret", time.Now())
+
+	req := httptest.NewRequest(http.MethodGet, "/oauth/atlassian/callback?code=test-auth-code", nil)
+	req.AddCookie(&http.Cookie{
+		Name:  userAuthSessionCookie,
+		Value: signedLogin,
+	})
+	rec := httptest.NewRecorder()
+
+	handler.handleAtlassianCallback(rec, req)
+
+	result := rec.Result()
+	defer result.Body.Close()
+
+	// Flow should complete without errors
+	assert.Equal(t, http.StatusOK, result.StatusCode)
+	body := rec.Body.String()
+	assert.Contains(t, body, "Authorization Complete")
+	assert.Contains(t, body, "octocat")
+	// Auto-execution should be skipped
+	assert.NotContains(t, body, "Jira issue created")
+	assert.NotContains(t, body, "Could not auto-create")
+	// FetchComment should NOT have been called
+	for _, call := range ghClient.calls {
+		assert.NotEqual(t, "FetchComment", call, "FetchComment should not be called with empty ReturnTo")
+	}
+	// Token should still be stored successfully
+	entry, err := store.Read(context.Background(), "octocat")
+	require.NoError(t, err)
+	assert.Equal(t, "atl_access_token_xyz", entry.AccessToken)
+	assert.Equal(t, "atl_refresh_token_xyz", entry.RefreshToken)
 }
