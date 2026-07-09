@@ -36,33 +36,33 @@ func ExtractDescriptionSource(commentBody string) string {
 // proper separator formatting and handles truncation to fit within
 // MaxDescriptionLength (32,000 characters).
 func BuildDescription(descriptionSource, githubURL string) string {
-	githubLinkLine := "GitHub link: " + githubURL
+	githubFooter := "*Issue created in GitHub using */jira create.***\nGitHub Link: " + githubURL
 
-	// If description source is empty or whitespace-only, return link-only output.
+	// If description source is empty or whitespace-only, return footer-only output.
 	if strings.TrimSpace(descriptionSource) == "" {
-		return githubLinkLine + "\n"
+		return githubFooter + "\n"
 	}
 
 	// Compute full description with separator.
-	full := descriptionSource + descriptionSeparator + githubLinkLine + "\n"
+	full := descriptionSource + descriptionSeparator + githubFooter + "\n"
 
 	// If it fits within the limit, return as-is.
 	if len([]rune(full)) <= MaxDescriptionLength {
 		return full
 	}
 
-	// Truncation is needed. Compute the suffix length (separator + link + newline + ellipsis).
-	suffix := descriptionSeparator + githubLinkLine + "\n"
+	// Truncation is needed. Compute the suffix length (separator + footer + newline + ellipsis).
+	suffix := descriptionSeparator + githubFooter + "\n"
 	suffixLen := len([]rune(suffix)) + 1 // +1 for the "…" truncation indicator
 
-	// Edge case: if the suffix alone would exceed the limit, return just the link truncated.
+	// Edge case: if the suffix alone would exceed the limit, return just the footer truncated.
 	if suffixLen >= MaxDescriptionLength {
-		linkOutput := githubLinkLine + "\n"
-		linkRunes := []rune(linkOutput)
-		if len(linkRunes) > MaxDescriptionLength {
-			linkRunes = linkRunes[:MaxDescriptionLength]
+		footerOutput := githubFooter + "\n"
+		footerRunes := []rune(footerOutput)
+		if len(footerRunes) > MaxDescriptionLength {
+			footerRunes = footerRunes[:MaxDescriptionLength]
 		}
-		return string(linkRunes)
+		return string(footerRunes)
 	}
 
 	// Truncate the description source to fit.
@@ -72,5 +72,5 @@ func BuildDescription(descriptionSource, githubURL string) string {
 		sourceRunes = sourceRunes[:maxSourceLen]
 	}
 
-	return string(sourceRunes) + truncationIndicator + descriptionSeparator + githubLinkLine + "\n"
+	return string(sourceRunes) + truncationIndicator + descriptionSeparator + githubFooter + "\n"
 }

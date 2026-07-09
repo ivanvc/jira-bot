@@ -54,24 +54,24 @@ func TestBuildDescription(t *testing.T) {
 		checkTrailingNL   bool
 	}{
 		{
-			name:              "empty description source produces link-only output without separator",
+			name:              "empty description source produces footer-only output without separator",
 			descriptionSource: "",
 			githubURL:         "https://github.com/org/repo/issues/1",
-			wantExact:         "GitHub link: https://github.com/org/repo/issues/1\n",
+			wantExact:         "*Issue created in GitHub using */jira create.***\nGitHub Link: https://github.com/org/repo/issues/1\n",
 			checkTrailingNL:   true,
 		},
 		{
-			name:              "whitespace-only description source produces link-only output without separator",
+			name:              "whitespace-only description source produces footer-only output without separator",
 			descriptionSource: "   \t\n  ",
 			githubURL:         "https://github.com/org/repo/issues/2",
-			wantExact:         "GitHub link: https://github.com/org/repo/issues/2\n",
+			wantExact:         "*Issue created in GitHub using */jira create.***\nGitHub Link: https://github.com/org/repo/issues/2\n",
 			checkTrailingNL:   true,
 		},
 		{
 			name:              "non-empty source produces structured output with separator",
 			descriptionSource: "This is the ticket description",
 			githubURL:         "https://github.com/org/repo/pull/42",
-			wantExact:         "This is the ticket description\n\n---\n\nGitHub link: https://github.com/org/repo/pull/42\n",
+			wantExact:         "This is the ticket description\n\n---\n\n*Issue created in GitHub using */jira create.***\nGitHub Link: https://github.com/org/repo/pull/42\n",
 			checkTrailingNL:   true,
 		},
 		{
@@ -91,14 +91,14 @@ func TestBuildDescription(t *testing.T) {
 			name:              "empty URL string handling",
 			descriptionSource: "A description",
 			githubURL:         "",
-			wantExact:         "A description\n\n---\n\nGitHub link: \n",
+			wantExact:         "A description\n\n---\n\n*Issue created in GitHub using */jira create.***\nGitHub Link: \n",
 			checkTrailingNL:   true,
 		},
 		{
 			name:              "empty source with empty URL",
 			descriptionSource: "",
 			githubURL:         "",
-			wantExact:         "GitHub link: \n",
+			wantExact:         "*Issue created in GitHub using */jira create.***\nGitHub Link: \n",
 			checkTrailingNL:   true,
 		},
 	}
@@ -124,7 +124,7 @@ func TestBuildDescription(t *testing.T) {
 				assert.Equal(t, MaxDescriptionLength, runeLen, "truncated output should be exactly MaxDescriptionLength")
 				assert.Contains(t, result, "…", "truncated output should contain the ellipsis truncation indicator")
 				assert.Contains(t, result, "\n\n---\n\n", "truncated output should still contain the separator")
-				assert.Contains(t, result, "GitHub link: ", "truncated output should still contain the GitHub link")
+				assert.Contains(t, result, "GitHub Link: ", "truncated output should still contain the GitHub link")
 			}
 
 			// All results must never exceed MaxDescriptionLength
@@ -142,7 +142,7 @@ func TestBuildDescription_SuffixExceedsMax(t *testing.T) {
 	runeLen := len([]rune(result))
 	assert.LessOrEqual(t, runeLen, MaxDescriptionLength, "output must not exceed MaxDescriptionLength even when suffix alone is too long")
 	// The output should contain at least part of the GitHub link
-	assert.Contains(t, result, "GitHub link: ", "output should contain the GitHub link prefix")
+	assert.Contains(t, result, "GitHub Link: ", "output should contain the GitHub link prefix")
 	// Should not contain the separator since description source is omitted
 	assert.NotContains(t, result, "\n\n---\n\n", "output should not contain separator when suffix alone exceeds max")
 }
