@@ -1,0 +1,83 @@
+name: Auto Release
+
+on:
+  schedule:
+    - cron: "0 10 * * 1" # Every Monday at 10:00 UTC
+  workflow_dispatch: # Allow manual trigger
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Determine next version and tag
+        id: version
+        run: |
+          # Get the latest tag (or default to v0.0.0 if none exists)
+          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          echo "latest_tag=${LATEST_TAG}" >> "$GITHUB_OUTPUT"
+
+          # Check if there are commits since the last tag
+          COMMIT_COUNT=$(git rev-list "${LATEST_TAG}..HEAD" --count)
+          if [ "$COMMIT_COUNT" -eq 0 ]; then
+            echo "No new commits since ${LATEST_TAG}. Skipping release."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Found ${COMMIT_COUNT} commits since ${LATEST_TAG}"
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+          # Parse current version
+          VERSION="${LATEST_TAG#v}"
+          MAJOR=$(echo "$VERSION" | cut -d. -f1)
+          MINOR=$(echo "$VERSION" | cut -d. -f2)
+          PATCH=$(echo "$VERSION" | cut -d. -f3)
+
+          # Analyze commit messages for semver bump
+          BUMP="patch"
+          while IFS= read -r MSG; do
+            # Breaking change: BREAKING CHANGE in body/footer or ! after type
+            if echo "$MSG" | grep -qiE '^[a-z]+(\(.+\))?!:|BREAKING CHANGE'; then
+              BUMP="major"
+              break
+            fi
+            # Feature: feat prefix
+            if echo "$MSG" | grep -qE '^feat(\(.+\))?:'; then
+              BUMP="minor"
+            fi
+          done < <(git log "${LATEST_TAG}..HEAD" --pretty=format:"%s")
+
+          # Calculate new version
+          case "$BUMP" in
+            major)
+              MAJOR=$((MAJOR + 1))
+              MINOR=0
+              PATCH=0
+              ;;
+            minor)
+              MINOR=$((MINOR + 1))
+              PATCH=0
+              ;;
+            patch)
+              PATCH=$((PATCH + 1))
+              ;;
+          esac
+
+          NEXT_TAG="v${MAJOR}.${MINOR}.${PATCH}"
+          echo "bump=${BUMP}" >> "$GITHUB_OUTPUT"
+          echo "next_tag=${NEXT_TAG}" >> "$GITHUB_OUTPUT"
+          echo "Bump: ${BUMP} → ${NEXT_TAG}"
+
+      - name: Create and push tag
+        if: steps.version.outputs.skip != 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "${{ steps.version.outputs.next_tag }}" -m "Release ${{ steps.version.outputs.next_tag }}"
+          git push origin "${{ steps.version.outputs.next_tag }}"
