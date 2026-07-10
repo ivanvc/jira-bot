@@ -35,3 +35,6 @@ data:
   {{- if .Values.config.github.redirect.delaySecs }}
   JIRA_BOT_GITHUB_REDIRECT_DELAY_SECONDS: {{ .Values.config.github.redirect.delaySecs | quote }}
   {{- end }}
+  {{- if .Values.config.jira.updateTitle }}
+  JIRA_BOT_UPDATE_TITLE: {{ .Values.config.jira.updateTitle }}
+  {{- end }}

@@ -8,15 +8,16 @@ import (
 
 // RepoConfig represents the per-repository configuration loaded from a YAML file.
 type RepoConfig struct {
-	Project string                 `yaml:"project"`
-	Type    string                 `yaml:"type"`
-	Assign  *bool                  `yaml:"assign"`
-	Fields  map[string]interface{} `yaml:"fields"`
+	Project     string                 `yaml:"project"`
+	Type        string                 `yaml:"type"`
+	Assign      *bool                  `yaml:"assign"`
+	UpdateTitle string                 `yaml:"update-title"`
+	Fields      map[string]interface{} `yaml:"fields"`
 }
 
 // IsEmpty returns true if no values are configured.
 func (rc RepoConfig) IsEmpty() bool {
-	return rc.Project == "" && rc.Type == "" && rc.Assign == nil && len(rc.Fields) == 0
+	return rc.Project == "" && rc.Type == "" && rc.Assign == nil && rc.UpdateTitle == "" && len(rc.Fields) == 0
 }
 
 // ParseRepoConfig parses YAML bytes into a RepoConfig.

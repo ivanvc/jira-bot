@@ -38,6 +38,7 @@ The following is my list of commands:
 	* ` + "`type:[type]`" + `: Specify the type of the Jira issue to create (i.e., ` + "`type:Bug`" + `, default: ` + "`%s`" + `)
 	* ` + "`project:[project]`" + `: Specify the project of the Jira issue to create (i.e., ` + "`project:ENG`" + `, default: ` + "`%s`" + `)
 	* ` + "`assign:true|false`" + `: Assign the created issue to yourself (default: ` + "`false`" + `)
+	* ` + "`update-title:prepend|append|none`" + ` (alias ` + "`ut`" + `, values: ` + "`prepend`" + `/` + "`p`" + `, ` + "`append`" + `/` + "`a`" + `, ` + "`none`" + `): Update the GitHub issue title with the Jira key (default: ` + "`none`" + `)
 
 **Custom title:** Words without a colon become the Jira issue title. If no title words are provided, the GitHub issue or pull request title is used by default. Title words and options can be mixed in any order.
 
@@ -221,7 +222,7 @@ func createJiraIssue(ctx context.Context, state *common.State, issueComment *git
 	}
 
 	// Load repo config if available
-	var repoProject, repoType string
+	var repoProject, repoType, repoUpdateTitle string
 	var repoFields map[string]interface{}
 	var repoAssign *bool
 	if state.RepoConfigLoader != nil {
@@ -238,6 +239,7 @@ func createJiraIssue(ctx context.Context, state *common.State, issueComment *git
 		repoType = repoCfg.Type
 		repoFields = repoCfg.Fields
 		repoAssign = repoCfg.Assign
+		repoUpdateTitle = repoCfg.UpdateTitle
 	}
 
 	commandProject := loadOptionFromCommand("project", options)
@@ -306,6 +308,25 @@ func createJiraIssue(ctx context.Context, state *common.State, issueComment *git
 	body := fmt.Sprintf("%s\n\n<!--JIRA_BOT_ISSUE:[%s]-->", issueBody, key)
 	if err := state.GitHubClient.UpdateIssueDescription(ctx, issueComment.Installation.ID, issueComment, body); err != nil {
 		return "", err
+	}
+
+	// Resolve update-title mode
+	commandUpdateTitle := loadOptionFromCommand("update-title", options)
+	if commandUpdateTitle == "" {
+		commandUpdateTitle = loadOptionFromCommand("ut", options)
+	}
+	mode := resolveUpdateTitle(commandUpdateTitle, repoUpdateTitle, state.Config.UpdateTitle)
+
+	// Apply title update if needed
+	if mode != updateTitleNone {
+		currentTitle := issueComment.Issue.Title
+		if !titleContainsKey(currentTitle, key) {
+			newTitle := formatTitle(mode, currentTitle, key)
+			if err := state.GitHubClient.UpdateIssueTitle(ctx, issueComment.Installation.ID, issueComment, newTitle); err != nil {
+				log.Error("Failed to update issue title", "error", err, "key", key)
+				// Continue — don't fail the whole operation
+			}
+		}
 	}
 
 	successMsg := fmt.Sprintf(successTextFormat, key)
@@ -460,7 +481,8 @@ func loadOptionWithDefault(option, fallback string, values []string) string {
 const maxFieldOverrides = 20
 
 // loadFieldsFromCommand extracts all key:value pairs from command options
-// that are not "project" or "type", applying coercion for well-known fields.
+// that are not reserved keys (project, type, assign, update-title, ut),
+// applying coercion for well-known fields.
 // The first colon is the delimiter; remaining colons are part of the value.
 // Duplicate keys: last occurrence wins. Empty values are ignored.
 // A maximum of 20 non-reserved key:value pairs are processed.
@@ -478,7 +500,7 @@ func loadFieldsFromCommand(options []string) map[string]interface{} {
 		value := parts[1]
 
 		// Skip reserved keys
-		if key == "project" || key == "type" || key == "assign" {
+		if key == "project" || key == "type" || key == "assign" || key == "update-title" || key == "ut" {
 			continue
 		}
 

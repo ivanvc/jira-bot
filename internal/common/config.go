@@ -51,6 +51,9 @@ type Config struct {
 
 	// Redirect delay in seconds on the success page before auto-redirecting
 	RedirectDelaySec int // JIRA_BOT_GITHUB_REDIRECT_DELAY_SECONDS, default 3
+
+	// Update title: prepend/append Jira key to GitHub issue/PR title after creation
+	UpdateTitle string // JIRA_BOT_UPDATE_TITLE, default ""
 }
 
 func LoadConfig() Config {
@@ -95,6 +98,9 @@ func LoadConfig() Config {
 
 	// Redirect delay
 	cfg.RedirectDelaySec = loadEnvInt("JIRA_BOT_GITHUB_REDIRECT_DELAY_SECONDS", 3)
+
+	// Update title
+	cfg.UpdateTitle = loadEnvWithDefault("JIRA_BOT_UPDATE_TITLE", "")
 
 	return cfg
 }

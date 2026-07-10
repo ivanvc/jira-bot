@@ -51,6 +51,11 @@ func (m *MockGitHubClient) UpdateIssueDescription(ctx context.Context, installat
 	return m.UpdateErr
 }
 
+func (m *MockGitHubClient) UpdateIssueTitle(ctx context.Context, installationID int64, issueComment *github.IssueComment, title string) error {
+	m.Calls = append(m.Calls, MockCall{Method: "UpdateIssueTitle", Args: []interface{}{ctx, installationID, issueComment, title}})
+	return nil
+}
+
 func (m *MockGitHubClient) FetchComment(ctx context.Context, installationID int64, owner, repo string, commentID uint64) (*github.IssueComment, error) {
 	m.Calls = append(m.Calls, MockCall{Method: "FetchComment", Args: []interface{}{ctx, installationID, owner, repo, commentID}})
 	return nil, nil

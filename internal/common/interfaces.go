@@ -22,6 +22,7 @@ type GitHubClientInterface interface {
 	ReactWithConfused(ctx context.Context, installationID int64, issueComment *github.IssueComment) error
 	PostComment(ctx context.Context, installationID int64, issueComment *github.IssueComment, body string) error
 	UpdateIssueDescription(ctx context.Context, installationID int64, issueComment *github.IssueComment, body string) error
+	UpdateIssueTitle(ctx context.Context, installationID int64, issueComment *github.IssueComment, title string) error
 	FetchComment(ctx context.Context, installationID int64, owner, repo string, commentID uint64) (*github.IssueComment, error)
 	EditComment(ctx context.Context, installationID int64, owner, repo string, commentID int64, body string) error
 	ListIssueComments(ctx context.Context, installationID int64, owner, repo string, issueNumber int) ([]*gogithub.IssueComment, error)

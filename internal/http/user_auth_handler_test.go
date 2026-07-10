@@ -1134,6 +1134,11 @@ func (m *mockGitHubClientForHandler) UpdateIssueDescription(_ context.Context, _
 	return nil
 }
 
+func (m *mockGitHubClientForHandler) UpdateIssueTitle(_ context.Context, _ int64, _ *github.IssueComment, _ string) error {
+	m.calls = append(m.calls, "UpdateIssueTitle")
+	return nil
+}
+
 func (m *mockGitHubClientForHandler) FetchComment(_ context.Context, installationID int64, owner, repo string, commentID uint64) (*github.IssueComment, error) {
 	m.calls = append(m.calls, "FetchComment")
 	m.FetchCommentInstallationID = installationID

@@ -135,6 +135,7 @@ config:
     defaultProject: ENG
     defaultIssueType: Task
     defaultAssign: true
+    updateTitle: prepend
 
 secrets:
   github:
@@ -166,6 +167,7 @@ secrets:
 | `JIRA_BOT_USER_TOKEN_SECRET_NAME` | No | `jira-bot-user-tokens` | K8s Secret name for per-user token storage |
 | `JIRA_BOT_REFRESH_CHECK_INTERVAL` | No | `30s` | How often the leader checks for tokens needing refresh (min: 10s, max: 300s) |
 | `JIRA_BOT_DEFAULT_ASSIGN` | No | `false` | Auto-assign created issues to the user who triggered the command |
+| `JIRA_BOT_UPDATE_TITLE` | No | — | Update GitHub issue/PR title with Jira key (`prepend`, `append`, or `none`) |
 | `JIRA_BOT_LISTEN_HTTP` | No | `:8080` | HTTP listen address |
 | `POD_NAME` | No | — | Pod name (from downward API, enables leader election) |
 | `POD_NAMESPACE` | No | — | Pod namespace (from downward API, enables leader election) |
@@ -232,6 +234,7 @@ If RBAC permissions are missing, the bot cannot store or retrieve user tokens an
 | `config.jira.defaultProject` | — | Default Jira project key (required) |
 | `config.jira.defaultIssueType` | — | Default Jira issue type (required) |
 | `config.jira.defaultAssign` | `false` | Auto-assign created issues to the user who triggered the command |
+| `config.jira.updateTitle` | — | Update GitHub issue/PR title with Jira key (`prepend`/`append`/`none`) |
 | `config.listenHTTP` | `:8080` | HTTP listen address |
 | `config.logLevel` | — | Log level override |
 | `config.github.redirect.baseURL` | `https://github.com` | Base URL for post-OAuth redirect (set for GitHub Enterprise) |
@@ -268,6 +271,7 @@ If both exist, `.github/jira-bot.yaml` wins. If neither exists, the bot falls ba
 project: ENG
 type: Bug
 assign: true
+update-title: prepend
 fields:
   components:
     - name: Backend
@@ -284,6 +288,7 @@ fields:
 | `project` | Default Jira project key |
 | `type` | Default Jira issue type |
 | `assign` | Auto-assign issues to creator (`true`/`false`, overrides global default) |
+| `update-title` | Update issue title with Jira key (`prepend`/`append`/`none`, overrides global default) |
 | `fields` | Map of arbitrary Jira fields included in every issue created from this repo |
 
 All fields are optional. The `fields` map accepts any structure that matches the Jira API schema for your project — scalars, arrays, or nested objects.
@@ -302,9 +307,20 @@ Command-line options always win. The repo config overrides global defaults but i
 
 The `assign` option follows the same priority chain. You can override it per-command with `assign:true` or `assign:false`.
 
+The `update-title` option (alias `ut`) also follows the same priority chain. It controls whether the GitHub issue/PR title is modified to include the Jira key in brackets. Valid values are `prepend` (or `p`), `append` (or `a`), and `none`. When set to `prepend`, the title becomes `[ENG-1234] Original title`. When set to `append`, it becomes `Original title [ENG-1234]`. Override per-command:
+
+```
+/jira create update-title:prepend
+/jira create ut:p
+/jira create update-title:append
+/jira create ut:a
+```
+
+If the title already contains `[KEY]`, the update is skipped. If the GitHub API returns an error during the title update, the bot logs the error and continues — the Jira issue is still created and the success comment is posted.
+
 ### Command-Line Field Overrides
 
-You can specify Jira fields inline when creating an issue. Any `key:value` pair that isn't `project` or `type` is treated as a field override:
+You can specify Jira fields inline when creating an issue. Any `key:value` pair that isn't a reserved option (`project`, `type`, `assign`, `update-title`/`ut`) is treated as a field override:
 
 ```
 /jira create priority:High components:Backend customfield_10001:myvalue

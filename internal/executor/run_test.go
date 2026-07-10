@@ -28,6 +28,11 @@ type MockGitHubClient struct {
 	ReactErr       error
 	UpdateErr      error
 
+	// UpdateIssueTitle configurable fields
+	UpdateTitleErr    error
+	UpdateTitleCalled bool
+	UpdateTitleTitle  string
+
 	// EditComment configurable fields
 	EditCommentErr    error
 	EditCommentCalled bool
@@ -56,6 +61,13 @@ func (m *MockGitHubClient) PostComment(ctx context.Context, installationID int64
 func (m *MockGitHubClient) UpdateIssueDescription(ctx context.Context, installationID int64, issueComment *github.IssueComment, body string) error {
 	m.Calls = append(m.Calls, MockCall{Method: "UpdateIssueDescription", Args: []interface{}{ctx, installationID, issueComment, body}})
 	return m.UpdateErr
+}
+
+func (m *MockGitHubClient) UpdateIssueTitle(ctx context.Context, installationID int64, issueComment *github.IssueComment, title string) error {
+	m.Calls = append(m.Calls, MockCall{Method: "UpdateIssueTitle", Args: []interface{}{ctx, installationID, issueComment, title}})
+	m.UpdateTitleCalled = true
+	m.UpdateTitleTitle = title
+	return m.UpdateTitleErr
 }
 
 func (m *MockGitHubClient) FetchComment(ctx context.Context, installationID int64, owner, repo string, commentID uint64) (*github.IssueComment, error) {
@@ -840,9 +852,12 @@ func TestLoadFieldsFromCommand_EmptyOptions(t *testing.T) {
 }
 
 func TestLoadFieldsFromCommand_SkipsReservedKeys(t *testing.T) {
-	result := loadFieldsFromCommand([]string{"project:ENG", "type:Bug", "priority:High"})
+	result := loadFieldsFromCommand([]string{"project:ENG", "type:Bug", "assign:true", "update-title:prepend", "ut:append", "priority:High"})
 	assert.NotContains(t, result, "project")
 	assert.NotContains(t, result, "type")
+	assert.NotContains(t, result, "assign")
+	assert.NotContains(t, result, "update-title")
+	assert.NotContains(t, result, "ut")
 	assert.Contains(t, result, "priority")
 }
 
@@ -1428,7 +1443,7 @@ func TestCreateJiraIssue_CommentBodyDescriptionOverrideFlowsToCreateIssue(t *tes
 
 	// Verify it contains the custom description text and the GitHub link
 	assert.Contains(t, description, "This is my custom description")
-	assert.Contains(t, description, "GitHub link: https://github.com/org/repo/issues/1")
+	assert.Contains(t, description, "GitHub Link: https://github.com/org/repo/issues/1")
 	// Verify it does NOT contain the issue body
 	assert.NotContains(t, description, "This is the issue body that should NOT be used")
 }
@@ -1457,7 +1472,7 @@ func TestCreateJiraIssue_NoBodyTextUsesIssueBodyAsDescriptionSource(t *testing.T
 
 	// Verify it contains the issue body and GitHub link
 	assert.Contains(t, description, "This is the GitHub issue body")
-	assert.Contains(t, description, "GitHub link: https://github.com/org/repo/issues/1")
+	assert.Contains(t, description, "GitHub Link: https://github.com/org/repo/issues/1")
 }
 
 func TestHelpText_IncludesCustomDescriptionDocumentation(t *testing.T) {
@@ -2396,4 +2411,123 @@ func TestRun_EditCommentID_Zero_PostsCommentAsUsual(t *testing.T) {
 		}
 	}
 	assert.True(t, postCommentFound, "Expected PostComment to be called with success message when editCommentID is zero")
+}
+
+// --- 5.5 Title update integration tests ---
+
+func TestCreateJiraIssue_UpdateTitle_PrependMode(t *testing.T) {
+	// Validates: Requirements 1.1, 3.2
+	// When update-title:prepend is in command options, UpdateIssueTitle is called
+	// with the formatted title "[KEY] <original title>".
+	gh := &MockGitHubClient{}
+	jira := &MockJiraClient{ReturnKey: "ENG-1234"}
+	state := newTestState(gh, jira)
+	ic := newIssueComment("/jira create update-title:prepend", "Issue body")
+
+	err := Run(context.Background(), state, ic)
+
+	require.NoError(t, err)
+	assert.True(t, gh.UpdateTitleCalled, "Expected UpdateIssueTitle to be called")
+	assert.Equal(t, "[ENG-1234] Test Issue", gh.UpdateTitleTitle)
+}
+
+func TestCreateJiraIssue_UpdateTitle_AppendMode(t *testing.T) {
+	// Validates: Requirements 1.2, 3.2
+	// When update-title:append is in command options, UpdateIssueTitle is called
+	// with the formatted title "<original title> [KEY]".
+	gh := &MockGitHubClient{}
+	jira := &MockJiraClient{ReturnKey: "ENG-5678"}
+	state := newTestState(gh, jira)
+	ic := newIssueComment("/jira create update-title:append", "Issue body")
+
+	err := Run(context.Background(), state, ic)
+
+	require.NoError(t, err)
+	assert.True(t, gh.UpdateTitleCalled, "Expected UpdateIssueTitle to be called")
+	assert.Equal(t, "Test Issue [ENG-5678]", gh.UpdateTitleTitle)
+}
+
+func TestCreateJiraIssue_UpdateTitle_NoneMode_SkipsUpdate(t *testing.T) {
+	// Validates: Requirements 1.3, 3.3
+	// When update-title is none (or absent), UpdateIssueTitle is NOT called.
+	gh := &MockGitHubClient{}
+	jira := &MockJiraClient{ReturnKey: "ENG-999"}
+	state := newTestState(gh, jira)
+	ic := newIssueComment("/jira create", "Issue body")
+
+	err := Run(context.Background(), state, ic)
+
+	require.NoError(t, err)
+	assert.False(t, gh.UpdateTitleCalled, "UpdateIssueTitle should not be called when mode is none")
+}
+
+func TestCreateJiraIssue_UpdateTitle_SkipsWhenTitleAlreadyContainsKey(t *testing.T) {
+	// Validates: Requirements 3.2
+	// When the issue title already contains [KEY], UpdateIssueTitle is NOT called.
+	gh := &MockGitHubClient{}
+	jira := &MockJiraClient{ReturnKey: "ENG-1234"}
+	state := newTestState(gh, jira)
+	ic := &github.IssueComment{
+		Action: "created",
+		Issue: github.Issue{
+			Title:   "[ENG-1234] Already tagged issue",
+			Body:    "Issue body",
+			HTMLURL: "https://github.com/org/repo/issues/1",
+		},
+		Comment: github.Comment{
+			Body:   "/jira create update-title:prepend",
+			NodeID: "node123",
+			ID:     1,
+			User:   github.CommentUser{Login: "testuser"},
+		},
+		Installation: github.Installation{ID: 42},
+	}
+
+	err := Run(context.Background(), state, ic)
+
+	require.NoError(t, err)
+	assert.False(t, gh.UpdateTitleCalled, "UpdateIssueTitle should not be called when title already contains the key")
+}
+
+func TestCreateJiraIssue_UpdateTitle_ErrorContinuesFlow(t *testing.T) {
+	// Validates: Requirements 3.3
+	// When UpdateIssueTitle returns an error, the flow continues and the success
+	// comment is still posted.
+	gh := &MockGitHubClient{UpdateTitleErr: errors.New("GitHub API rate limited")}
+	jira := &MockJiraClient{ReturnKey: "ENG-4321"}
+	state := newTestState(gh, jira)
+	ic := newIssueComment("/jira create update-title:prepend", "Issue body")
+
+	err := Run(context.Background(), state, ic)
+
+	require.NoError(t, err)
+	// UpdateIssueTitle was called (and failed)
+	assert.True(t, gh.UpdateTitleCalled, "Expected UpdateIssueTitle to be called")
+	// Success comment should still have been posted
+	var successCommentFound bool
+	for _, call := range gh.Calls {
+		if call.Method == "PostComment" {
+			body := call.Args[3].(string)
+			if strings.Contains(body, "ENG-4321") {
+				successCommentFound = true
+				break
+			}
+		}
+	}
+	assert.True(t, successCommentFound, "Expected success comment to be posted even after UpdateIssueTitle error")
+}
+
+func TestCreateJiraIssue_UpdateTitle_UTAlias_Prepend(t *testing.T) {
+	// Validates: Requirements 1.1, 4.3
+	// The ut alias works identically to update-title.
+	gh := &MockGitHubClient{}
+	jira := &MockJiraClient{ReturnKey: "ENG-7777"}
+	state := newTestState(gh, jira)
+	ic := newIssueComment("/jira create ut:prepend", "Issue body")
+
+	err := Run(context.Background(), state, ic)
+
+	require.NoError(t, err)
+	assert.True(t, gh.UpdateTitleCalled, "Expected UpdateIssueTitle to be called via ut alias")
+	assert.Equal(t, "[ENG-7777] Test Issue", gh.UpdateTitleTitle)
 }

@@ -135,6 +135,27 @@ func (c *Client) UpdateIssueDescription(ctx context.Context, installationID int6
 	return nil
 }
 
+// UpdateIssueTitle updates the issue title.
+func (c *Client) UpdateIssueTitle(ctx context.Context, installationID int64, issueComment *IssueComment, title string) error {
+	client, err := c.GetInstallationClient(ctx, installationID)
+	if err != nil {
+		return err
+	}
+
+	issue := &github.IssueRequest{Title: &title}
+	req, err := client.NewRequest("PATCH", issueComment.Issue.URL, issue)
+	if err != nil {
+		return err
+	}
+
+	i := new(github.Issue)
+	if _, err := client.Do(ctx, req, i); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 // EditComment edits an existing issue comment by ID.
 func (c *Client) EditComment(ctx context.Context, installationID int64, owner, repo string, commentID int64, body string) error {
 	client, err := c.GetInstallationClient(ctx, installationID)

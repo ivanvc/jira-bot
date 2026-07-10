@@ -25,6 +25,8 @@ config:
     defaultAssign: false
     # Required: Atlassian Cloud ID for the target Jira site
     cloudID: ""
+    # Optional: Update GitHub issue/PR title with Jira key (prepend/append/none, default: disabled)
+    updateTitle: ""
   github:
     # Required: The GitHub App ID
     appID: ""

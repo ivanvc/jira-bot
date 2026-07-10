@@ -226,3 +226,46 @@ func TestParseRepoConfig_FieldsAllNullValues(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Empty(t, cfg.Fields)
 }
+
+func TestParseRepoConfig_UpdateTitle_Prepend(t *testing.T) {
+	data := []byte("project: ENG\nupdate-title: prepend\n")
+
+	cfg, err := ParseRepoConfig(data)
+
+	assert.NoError(t, err)
+	assert.Equal(t, "ENG", cfg.Project)
+	assert.Equal(t, "prepend", cfg.UpdateTitle)
+}
+
+func TestParseRepoConfig_UpdateTitle_Append(t *testing.T) {
+	data := []byte("update-title: append\n")
+
+	cfg, err := ParseRepoConfig(data)
+
+	assert.NoError(t, err)
+	assert.Equal(t, "append", cfg.UpdateTitle)
+}
+
+func TestParseRepoConfig_UpdateTitle_None(t *testing.T) {
+	data := []byte("update-title: none\n")
+
+	cfg, err := ParseRepoConfig(data)
+
+	assert.NoError(t, err)
+	assert.Equal(t, "none", cfg.UpdateTitle)
+}
+
+func TestParseRepoConfig_UpdateTitle_Absent(t *testing.T) {
+	data := []byte("project: ENG\ntype: Story\n")
+
+	cfg, err := ParseRepoConfig(data)
+
+	assert.NoError(t, err)
+	assert.Equal(t, "", cfg.UpdateTitle)
+}
+
+func TestRepoConfig_IsEmpty_NonEmpty_UpdateTitleSet(t *testing.T) {
+	cfg := RepoConfig{UpdateTitle: "prepend"}
+
+	assert.False(t, cfg.IsEmpty())
+}
