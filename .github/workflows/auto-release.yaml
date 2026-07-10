@@ -1,29 +1,42 @@
-name: Auto Release
+name: Release
 
 on:
+  push:
+    tags:
+      - "v*"
   schedule:
     - cron: "0 10 * * 1" # Every Monday at 10:00 UTC (weekly check)
     - cron: "0 10 1 * *" # 1st of every month at 10:00 UTC (monthly release)
   workflow_dispatch: # Allow manual trigger
 
+permissions:
+  contents: write
+
 jobs:
   release:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
 
-      - name: Determine next version and tag
+      - name: Determine version
         id: version
         run: |
-          # Get the latest tag (or default to v0.0.0 if none exists)
-          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
-          echo "latest_tag=${LATEST_TAG}" >> "$GITHUB_OUTPUT"
+          # If triggered by a tag push, use the tag directly
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            TAG="${{ github.ref_name }}"
+            VERSION="${TAG#v}"
+            echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+            echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "Using pushed tag: ${TAG}"
+            exit 0
+          fi
 
-          # Check if there are commits since the last tag
+          # Otherwise, compute the next version from commit history
+          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+
           COMMIT_COUNT=$(git rev-list "${LATEST_TAG}..HEAD" --count)
           if [ "$COMMIT_COUNT" -eq 0 ]; then
             echo "No new commits since ${LATEST_TAG}. Skipping release."
@@ -33,7 +46,7 @@ jobs:
 
           echo "Found ${COMMIT_COUNT} commits since ${LATEST_TAG}"
 
-          # Check if any commits are features or fixes (release-worthy for weekly)
+          # Check if any commits are features or fixes
           HAS_RELEASE_WORTHY=false
           while IFS= read -r MSG; do
             if echo "$MSG" | grep -qE '^(feat|fix)(\(.+\))?[!]?:'; then
@@ -42,15 +55,15 @@ jobs:
             fi
           done < <(git log "${LATEST_TAG}..HEAD" --pretty=format:"%s")
 
-          # Determine if this is the monthly schedule (1st of month)
+          # Monthly (1st of month): always release
+          # Manual dispatch: always release
+          # Weekly cron: only if there are feat/fix commits
           IS_MONTHLY=false
           if [ "$(date +%d)" = "01" ]; then
             IS_MONTHLY=true
           fi
 
-          # Weekly: only release if there are features or fixes
-          # Monthly: release regardless (catches dependency bumps, chores, etc.)
-          if [ "$HAS_RELEASE_WORTHY" = "false" ] && [ "$IS_MONTHLY" = "false" ]; then
+          if [ "${{ github.event_name }}" = "schedule" ] && [ "$HAS_RELEASE_WORTHY" = "false" ] && [ "$IS_MONTHLY" = "false" ]; then
             echo "No features or fixes since ${LATEST_TAG}. Skipping weekly release."
             echo "skip=true" >> "$GITHUB_OUTPUT"
             exit 0
@@ -58,51 +71,79 @@ jobs:
 
           echo "skip=false" >> "$GITHUB_OUTPUT"
 
-          # Parse current version
+          # Parse current version and compute next
           VERSION="${LATEST_TAG#v}"
           MAJOR=$(echo "$VERSION" | cut -d. -f1)
           MINOR=$(echo "$VERSION" | cut -d. -f2)
           PATCH=$(echo "$VERSION" | cut -d. -f3)
 
-          # Analyze commit messages for semver bump
           BUMP="patch"
           while IFS= read -r MSG; do
-            # Breaking change: BREAKING CHANGE in body/footer or ! after type
             if echo "$MSG" | grep -qiE '^[a-z]+(\(.+\))?!:|BREAKING CHANGE'; then
               BUMP="major"
               break
             fi
-            # Feature: feat prefix
             if echo "$MSG" | grep -qE '^feat(\(.+\))?:'; then
               BUMP="minor"
             fi
           done < <(git log "${LATEST_TAG}..HEAD" --pretty=format:"%s")
 
-          # Calculate new version
           case "$BUMP" in
-            major)
-              MAJOR=$((MAJOR + 1))
-              MINOR=0
-              PATCH=0
-              ;;
-            minor)
-              MINOR=$((MINOR + 1))
-              PATCH=0
-              ;;
-            patch)
-              PATCH=$((PATCH + 1))
-              ;;
+            major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
+            minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
+            patch) PATCH=$((PATCH + 1)) ;;
           esac
 
-          NEXT_TAG="v${MAJOR}.${MINOR}.${PATCH}"
-          echo "bump=${BUMP}" >> "$GITHUB_OUTPUT"
-          echo "next_tag=${NEXT_TAG}" >> "$GITHUB_OUTPUT"
-          echo "Bump: ${BUMP} → ${NEXT_TAG}"
+          TAG="v${MAJOR}.${MINOR}.${PATCH}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${MAJOR}.${MINOR}.${PATCH}" >> "$GITHUB_OUTPUT"
+          echo "Bump: ${BUMP} → ${TAG}"
 
       - name: Create and push tag
-        if: steps.version.outputs.skip != 'true'
+        if: steps.version.outputs.skip != 'true' && github.ref_type != 'tag'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "${{ steps.version.outputs.next_tag }}" -m "Release ${{ steps.version.outputs.next_tag }}"
-          git push origin "${{ steps.version.outputs.next_tag }}"
+          git tag -a "${{ steps.version.outputs.tag }}" -m "Release ${{ steps.version.outputs.tag }}"
+          git push origin "${{ steps.version.outputs.tag }}"
+
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        if: steps.version.outputs.skip != 'true'
+        with:
+          go-version-file: go.mod
+
+      - uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        if: steps.version.outputs.skip != 'true'
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Run GoReleaser
+        if: steps.version.outputs.skip != 'true'
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          version: latest
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Bump Chart.yaml and release chart
+        if: steps.version.outputs.skip != 'true'
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          sed -i "s/^version: .*/version: ${VERSION}/" charts/jira-bot/Chart.yaml
+          sed -i "s/^appVersion: .*/appVersion: \"${VERSION}\"/" charts/jira-bot/Chart.yaml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add charts/jira-bot/Chart.yaml
+          git commit -m "ci: bump chart to ${VERSION}"
+          git push origin HEAD:main
+
+      - name: Run chart-releaser
+        if: steps.version.outputs.skip != 'true'
+        uses: helm/chart-releaser-action@cae68fefc6b5f367a0275617c9f83181ba54714f # v1.7.0
+        with:
+          skip_existing: true
+        env:
+          CR_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
+          CR_RELEASE_NAME_TEMPLATE: "{{ .Version }}"
