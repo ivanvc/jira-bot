@@ -13,14 +13,14 @@ builds:
 
 dockers:
   - image_templates:
-      - "ivan/jira-bot:{{ .Tag }}-amd64"
+      - "ivan/jira-bot:{{ .Version }}-amd64"
       - "ivan/jira-bot:latest-amd64"
     use: buildx
     dockerfile: Dockerfile.goreleaser
     build_flag_templates:
       - "--platform=linux/amd64"
   - image_templates:
-      - "ivan/jira-bot:{{ .Tag }}-arm64"
+      - "ivan/jira-bot:{{ .Version }}-arm64"
       - "ivan/jira-bot:latest-arm64"
     use: buildx
     dockerfile: Dockerfile.goreleaser
@@ -29,10 +29,10 @@ dockers:
       - "--platform=linux/arm64"
 
 docker_manifests:
-  - name_template: "ivan/jira-bot:{{ .Tag }}"
+  - name_template: "ivan/jira-bot:{{ .Version }}"
     image_templates:
-      - "ivan/jira-bot:{{ .Tag }}-amd64"
-      - "ivan/jira-bot:{{ .Tag }}-arm64"
+      - "ivan/jira-bot:{{ .Version }}-amd64"
+      - "ivan/jira-bot:{{ .Version }}-arm64"
   - name_template: "ivan/jira-bot:latest"
     image_templates:
       - "ivan/jira-bot:latest-amd64"
