@@ -2,7 +2,8 @@ name: Auto Release
 
 on:
   schedule:
-    - cron: "0 10 * * 1" # Every Monday at 10:00 UTC
+    - cron: "0 10 * * 1" # Every Monday at 10:00 UTC (weekly check)
+    - cron: "0 10 1 * *" # 1st of every month at 10:00 UTC (monthly release)
   workflow_dispatch: # Allow manual trigger
 
 jobs:
@@ -31,6 +32,30 @@ jobs:
           fi
 
           echo "Found ${COMMIT_COUNT} commits since ${LATEST_TAG}"
+
+          # Check if any commits are features or fixes (release-worthy for weekly)
+          HAS_RELEASE_WORTHY=false
+          while IFS= read -r MSG; do
+            if echo "$MSG" | grep -qE '^(feat|fix)(\(.+\))?[!]?:'; then
+              HAS_RELEASE_WORTHY=true
+              break
+            fi
+          done < <(git log "${LATEST_TAG}..HEAD" --pretty=format:"%s")
+
+          # Determine if this is the monthly schedule (1st of month)
+          IS_MONTHLY=false
+          if [ "$(date +%d)" = "01" ]; then
+            IS_MONTHLY=true
+          fi
+
+          # Weekly: only release if there are features or fixes
+          # Monthly: release regardless (catches dependency bumps, chores, etc.)
+          if [ "$HAS_RELEASE_WORTHY" = "false" ] && [ "$IS_MONTHLY" = "false" ]; then
+            echo "No features or fixes since ${LATEST_TAG}. Skipping weekly release."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           echo "skip=false" >> "$GITHUB_OUTPUT"
 
           # Parse current version
